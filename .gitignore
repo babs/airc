@@ -1,0 +1,9 @@
+bin/
+*.exe
+*.test
+*.out
+coverage.txt
+.env
+.claude/scratchpad/
+*.db
+*.db-*
