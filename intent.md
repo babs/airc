@@ -40,19 +40,19 @@ Tourne sur la machine de dev : c'est là que vivent les CLI, les worktrees et l'
 - Un channel par tâche (`task-<id>`), `lobby` pour le contrôle. Topic = première ligne du channel.
 
 ### 2.2 Driver — le réveil
-- Table `agents {nick, provider, channel, session_id, cwd, sandbox, allowed_tools, last_msg_id}` dans le même SQLite.
+- Table `agents {nick, provider, channel, session_id, cwd, sandbox, tools, last_msg_id}` dans le même SQLite.
 - Sur un message avec `to = nick` :
   1. construit le prompt = **prompt protocole** (§3) + messages du channel depuis `last_msg_id` (delta, pas de rejeu) + message ;
   2. exécute selon le provider :
-     - Claude : `claude -p --resume <session_id> --append-system-prompt <protocole> --allowedTools <…> "<prompt>"`
-     - Codex : `codex exec resume <thread_id> "<prompt>"`
+     - Claude : `claude -p --resume <session_id> --append-system-prompt <protocole> --allowedTools <…>`, prompt sur stdin
+     - Codex : `codex exec resume <thread_id> -c sandbox_mode=… -`, protocole + prompt sur stdin
   3. insère la réponse dans le bus sous le nick de l'agent, parse les tags de fin de tour.
 - Une file par nick : les tours d'une même session sont sérialisés.
-- Commandes humaines (messages dans `lobby` ou endpoint dédié) : `!spawn <nick> <provider> <channel> <cwd> [--sandbox ro|rw] [--tools …]`, `!stop <nick>`, `!status`, `!kill <nick>`.
+- Commandes humaines (messages `!…` dans n'importe quel channel) : `!spawn <nick> <provider> <channel> <cwd> [--sandbox ro|rw] [--tools …]`, `!stop <nick>`, `!kill <nick>`, `!status`, `!release [n]`, `!lock`, `!unlock`.
 - Notification : `[ask]` adressé à un humain ou `[waiting for human]` → POST ntfy.
 
 ### 2.3 `say` — la parole pendant le tour
-- Pas de MCP. `curl -X POST localhost:<port>/msg` dans les `allowed_tools` de l'agent, token en env.
+- Pas de MCP. `curl -X POST localhost:<port>/msg` dans les `tools` de l'agent, token en env.
 - Sert à publier de l'avancement ou interpeller un pair mid-tour. Ne permet pas de recevoir : le pair répond dans le bus, l'agent le verra à son prochain réveil.
 
 ## 3. Conventions
@@ -61,23 +61,23 @@ Tourne sur la machine de dev : c'est là que vivent les CLI, les worktrees et l'
 |---|---|
 | Nick | `<provider>-<rôle>[-<n>]` : `claude-impl`, `codex-review`, `claude-lead-2` |
 | Channel | `task-<id>` par tâche ; `lobby` pour le contrôle |
-| Adressage | champ `to` — seul déclencheur de réveil. Dans une réponse d'agent, ligne `@nick` en tête ou `to:` parsé par le driver |
+| Adressage | champ `to` — seul déclencheur de réveil. Dérivé de la première ligne commençant par `@nick` (n'importe où dans le corps) |
 | Demander | terminer le tour par un message adressé + `[ask]` ; la réponse réveille |
 | Tags de fin de tour | `[done]`, `[ask]`, `[blocked]`, `[waiting for human]` |
 | Longueur | libre. Markdown, blocs de code. Le résumé en tête reste court pour l'humain |
 | DM | pas de DM : tout passe par le channel de la tâche |
 
-**Prompt protocole** : injecté par le driver à chaque tour, il porte ces conventions à l'agent (adressage, tags, pairs présents dans le channel, usage de `say`). Claude : `--append-system-prompt`. Codex : `AGENTS.md` dans le worktree ou équivalent (Phase 0).
+**Prompt protocole** : injecté par le driver à chaque tour, il porte ces conventions à l'agent (adressage, tags, pairs présents dans le channel, usage de `say`). Claude : `--append-system-prompt`. Codex : préfixe du prompt (pas de flag équivalent sur `exec`).
 
 ## 4. Garde-fous (v1, non négociables)
 
 - Réveil uniquement sur adressage explicite ; jamais sur le bruit du channel.
-- Cap bot→bot : N messages consécutifs d'agents dans un channel sans message humain (3–5), puis `[waiting for human]` et pause. Un message humain remet le compteur à zéro.
+- Cap bot→bot : N messages consécutifs d'agents dans un channel sans message humain (défaut 4), puis `[waiting for human]` et pause. Un message humain remet le compteur à zéro. `!release <n>` (bouton + nombre dans l'UI) libère n tours au-delà du cap et rejoue le réveil mis en pause. `!lock` / `!unlock` gèle un channel.
 - Budget par tâche : nombre max de tours par nick et par channel, coupure automatique.
 - Max de durée de tour ; dépassement → kill du process, `[blocked]` reposté.
 - Sécurité : les messages d'un autre agent sont de l'**input non fiable** pour un agent avec accès disque.
   - Codex : `approval_policy = "never"` (obligatoire en `exec`, sinon échec), `sandbox_mode = "read-only"` pour un reviewer, `"workspace-write"` pour un implémenteur, `network_access` explicite si besoin.
-  - Claude : en `-p`, un tool non pré-autorisé est refusé, pas demandé. `--permission-mode acceptEdits` ne couvre pas `Bash` : `allowed_tools` par nick, liste explicite et minimale (`Bash(git *)`, `Bash(make test)`, `Bash(curl -X POST localhost:*)`, …). Jamais `bypassPermissions`.
+  - Claude : en `-p`, un tool non pré-autorisé est refusé, pas demandé. `--permission-mode acceptEdits` ne couvre pas `Bash` : `tools` par nick, liste explicite et minimale (`Bash(git:*)`, `Bash(make:*)`, `Bash(curl:*)`, sans espaces). Jamais `bypassPermissions`.
 - Le bus écoute sur `localhost` uniquement. Exposition externe = derrière l'ingress/oauth-proxy existant, jamais en direct.
 - Chaque instance dans son propre worktree, sauf décision explicite au `!spawn`. Deux agents sur le même arbre : un seul en écriture.
 
@@ -99,7 +99,7 @@ Tourne sur la machine de dev : c'est là que vivent les CLI, les worktrees et l'
 - [ ] Réveil sur `to`, file par nick, insertion de la réponse, parse des tags.
 - [ ] Prompt protocole + delta de contexte depuis `last_msg_id`.
 - [ ] `!stop`, `!status`, `!kill`.
-- [ ] `say` : token en env de l'agent, `curl` dans `allowed_tools`.
+- [ ] `say` : token en env de l'agent, `curl` dans `tools`.
 
 ### Phase 3 — Garde-fous (½ journée)
 - [ ] Cap bot→bot, budget par tâche, max durée de tour, tags `[waiting for human]`.
@@ -126,7 +126,7 @@ Un seul scénario, de bout en bout :
 | Risque | Mitigation |
 |---|---|
 | Boucle bot→bot | Cap d'échanges + budget par tâche |
-| Prompt injection inter-agents | Sandbox stricts, `allowed_tools` minimaux, pas de bypass, worktrees isolés, bus sur localhost |
+| Prompt injection inter-agents | Sandbox stricts, `tools` minimaux, pas de bypass, worktrees isolés, bus sur localhost |
 | Agent qui ignore le protocole (pas de tag, pas d'adressage) | Prompt protocole à chaque tour ; sans adressage personne ne se réveille, l'humain relance |
 | Session Claude/Codex perdue ou corrompue | `!spawn` idempotent ; resume échoue → nouvelle session, contexte = topic + log du channel |
 | Tour trop long | Max durée, kill, `[blocked]` |

@@ -1,0 +1,22 @@
+version: "2"
+linters:
+  enable:
+    - bodyclose
+    - gocritic
+    - gosec
+    - misspell
+    - noctx
+    - revive
+    - unconvert
+  settings:
+    revive:
+      rules:
+        - name: exported
+    errcheck:
+      exclude-functions:
+        - (*database/sql.Rows).Close
+        - (io.ReadCloser).Close
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters: [errcheck, gosec]

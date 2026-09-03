@@ -7,3 +7,4 @@ coverage.txt
 .claude/scratchpad/
 *.db
 *.db-*
+.scratchpad/
