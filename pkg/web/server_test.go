@@ -13,6 +13,7 @@ import (
 	"go.uber.org/zap"
 
 	"airc/pkg/bus"
+	"airc/pkg/driver"
 	"airc/pkg/store"
 )
 
@@ -24,7 +25,10 @@ func newSrv(t *testing.T) (*httptest.Server, *bus.Bus) {
 	}
 	t.Cleanup(func() { s.Close() })
 	b := bus.New(s)
-	ts := httptest.NewServer(New(b, "admin", zap.NewNop()).Handler())
+	status := func(context.Context) ([]driver.AgentStatus, error) {
+		return []driver.AgentStatus{{Nick: "claude-impl", Channel: "task-1", State: "running"}, {Nick: "far-away", Channel: "task-2", State: "idle"}}, nil
+	}
+	ts := httptest.NewServer(New(b, "admin", zap.NewNop(), status, "boot-1").Handler())
 	t.Cleanup(ts.Close)
 	return ts, b
 }
@@ -69,7 +73,9 @@ func TestPostMsgAuthAndValidation(t *testing.T) {
 		{"bad to", "admin", `{"channel":"c","from":"h","to":"X","body":"x"}`, 400, "invalid to"},
 		{"admin ok", "admin", `{"channel":"c","from":"h","body":"@claude-impl hi [ask]"}`, 201, `"to":"claude-impl"`},
 		{"agent pinned", "agent-tok", `{"channel":"other","from":"human","body":"note"}`, 201, `"channel":"task-1","from":"claude-impl"`},
-		{"agent cross-channel to", "agent-tok", `{"body":"@far-away wake up"}`, 403, "another channel"},
+		{"agent cross-channel to", "agent-tok", `{"body":"@far-away wake up"}`, 403, "use @task-2:far-away"},
+		{"agent relayed to", "agent-tok", `{"body":"@task-2:far-away wake up"}`, 201, `"to":"task-2:far-away"`},
+		{"bad relay form", "admin", `{"channel":"c","from":"h","to":"a:b:c","body":"x"}`, 400, "invalid to"},
 		{"stopped agent token", "stopped-tok", `{"body":"x"}`, 401, "agent stopped"},
 	}
 	for _, c := range cases {
@@ -90,8 +96,12 @@ func TestPostMsgAuthAndValidation(t *testing.T) {
 	if code != 200 || strings.Contains(body, "far-away") || !strings.Contains(body, `"nick":"claude-impl"`) {
 		t.Fatalf("agent must only see its channel: %d %s", code, body)
 	}
+	code, body = do(t, ts, "GET", "/status", "agent-tok", "")
+	if code != 200 || strings.Contains(body, "far-away") || !strings.Contains(body, `"state":"running"`) {
+		t.Fatalf("status filtered per agent: %d %s", code, body)
+	}
 	code, body = do(t, ts, "GET", "/channels", "agent-tok", "")
-	if code != 200 || strings.Contains(body, "task-2") || strings.Contains(body, "confidential") {
+	if code != 200 || strings.Contains(body, `"name":"task-2"`) || strings.Contains(body, "confidential") {
 		t.Fatalf("agent must not see other channels: %d %s", code, body)
 	}
 	code, body = do(t, ts, "GET", "/channels", "admin", "")
@@ -100,6 +110,15 @@ func TestPostMsgAuthAndValidation(t *testing.T) {
 	}
 	if code, _ := do(t, ts, "GET", "/healthz", "", ""); code != 200 {
 		t.Fatal("healthz needs no auth")
+	}
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, ts.URL+"/healthz", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.Header.Get("X-Airc-Boot") != "boot-1" {
+		t.Fatalf("boot header: %q", resp.Header.Get("X-Airc-Boot"))
 	}
 	if code, body := do(t, ts, "GET", "/", "", ""); code != 200 || !strings.Contains(body, "<title>airc") {
 		t.Fatalf("ui: %d", code)

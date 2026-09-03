@@ -77,7 +77,7 @@ Tourne sur la machine de dev : c'est là que vivent les CLI, les worktrees et l'
 - Max de durée de tour ; dépassement → kill du process, `[blocked]` reposté.
 - Sécurité : les messages d'un autre agent sont de l'**input non fiable** pour un agent avec accès disque.
   - Codex : `approval_policy = "never"` (obligatoire en `exec`, sinon échec), `sandbox_mode = "read-only"` pour un reviewer, `"workspace-write"` pour un implémenteur, `network_access` explicite si besoin.
-  - Claude : en `-p`, un tool non pré-autorisé est refusé, pas demandé. `--permission-mode acceptEdits` ne couvre pas `Bash` : `tools` par nick, liste explicite et minimale (`Bash(git:*)`, `Bash(make:*)`, `Bash(curl:*)`, sans espaces). Jamais `bypassPermissions`.
+  - Claude : en `-p`, un tool non pré-autorisé est refusé, pas demandé. `--permission-mode auto` par défaut en `rw` (classifieur Claude Code), `default` en `ro` ; `tools` par nick, liste explicite (`Bash(git:*)`, `Bash(make:*)`, `Bash(curl:*)`, sans espaces). Jamais `bypassPermissions`.
 - Le bus écoute sur `localhost` uniquement. Exposition externe = derrière l'ingress/oauth-proxy existant, jamais en direct.
 - Chaque instance dans son propre worktree, sauf décision explicite au `!spawn`. Deux agents sur le même arbre : un seul en écriture.
 

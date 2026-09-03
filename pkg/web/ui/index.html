@@ -5,46 +5,120 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>airc</title>
 <style>
-  :root { --bg:#111; --fg:#ddd; --dim:#888; --line:#333; --sys:#3a3a1a; --me:#1a2a3a; --ask:#a60; --done:#284; --blocked:#a33; --wait:#a60; }
+  :root {
+    --bg:#16181d; --panel:#1b1e25; --raised:#22262f; --line:#2b303a; --fg:#d7dae1; --dim:#8a919d; --faint:#5c6370;
+    --me:#1e2733; --sys:#252826;
+    --human:#6fa6ff; --claude:#b58cff; --codex:#5fcf9a; --airc:#9a9f8a; --amber:#e0a33b;
+    --done:#2f8a58; --ask:#c67d2c; --blocked:#c2453f; --wait:#c49a2a;
+    --side:14rem;
+  }
   * { box-sizing:border-box }
-  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.4 system-ui, sans-serif; display:grid; grid-template-rows:auto 1fr auto; height:100vh }
-  header { display:flex; flex-wrap:wrap; gap:.5rem; align-items:center; padding:.5rem; border-bottom:1px solid var(--line) }
-  header input, header select, header button, textarea { background:#000; color:var(--fg); border:1px solid var(--line); border-radius:4px; padding:.3rem .5rem; font:inherit }
-  header input[type=number] { width:4rem }
-  #agents { font-size:12px; color:var(--dim); margin-left:auto; display:flex; gap:.6rem; flex-wrap:wrap }
-  #agents span.running { color:#fc6 } #agents span.stopped { text-decoration:line-through }
-  main { overflow-y:auto; padding:.5rem }
-  .msg { padding:.4rem .6rem; border-left:3px solid var(--line); margin-bottom:.4rem; border-radius:0 4px 4px 0 }
-  .msg.sys { background:var(--sys); border-color:#aa8 }
-  .msg.me { background:var(--me) }
-  .meta { color:var(--dim); font-size:12px; display:flex; gap:.6rem }
-  .meta b { color:var(--fg) }
-  .tag { padding:0 .4rem; border-radius:3px; color:#fff; font-size:11px }
-  .tag.done{background:var(--done)} .tag.ask{background:var(--ask)} .tag.blocked{background:var(--blocked)} .tag.waiting{background:var(--wait)}
-  .body { white-space:pre-wrap; word-break:break-word; margin-top:.2rem }
-  .body.md { white-space:normal } .body pre { background:#000; padding:.5rem; overflow-x:auto; border-radius:4px } .body code { font-family:ui-monospace, monospace }
-  .body p { margin:.3rem 0 }
-  form { display:flex; gap:.5rem; padding:.5rem; border-top:1px solid var(--line) }
-  textarea { flex:1; min-height:3.5rem; resize:vertical }
-  #status { color:var(--dim); font-size:12px }
+  html, body { height:100% }
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.45 system-ui, "Segoe UI", Roboto, sans-serif;
+    display:grid; grid-template-columns:var(--side) 1fr; grid-template-rows:auto 1fr auto; grid-template-areas:"side head" "side main" "side compose"; height:100vh; overflow:hidden }
+  button, input, textarea { font:inherit; color:var(--fg); background:var(--raised); border:1px solid var(--line); border-radius:6px; padding:.35rem .6rem }
+  button { cursor:pointer } button:hover { border-color:var(--dim) }
+  input:focus, textarea:focus, button:focus-visible { outline:2px solid var(--human); outline-offset:1px }
+  /* sidebar: brand, channels, identity */
+  aside { grid-area:side; background:var(--panel); border-right:1px solid var(--line); display:flex; flex-direction:column; min-height:0; position:relative }
+  #brand { padding:.8rem .9rem .5rem; font-weight:650; letter-spacing:.02em; display:flex; align-items:center; gap:.5rem }
+  #brand i { width:.55rem; height:.55rem; border-radius:50%; background:var(--faint); display:inline-block }
+  #brand i.live { background:var(--codex) } #brand i.off { background:var(--blocked) }
+  #status { color:var(--dim); font-size:12px; font-weight:400; margin-left:auto; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:60% }
+  #chans { overflow-y:auto; flex:1; padding:.25rem 0 }
+  #chans div { padding:.45rem .9rem; cursor:pointer; border-left:3px solid transparent }
+  #chans div.cur { background:var(--me); border-left-color:var(--human) }
+  #chans div:hover { background:var(--raised) }
+  #chans b { display:block; font-weight:600 }
+  #chans small { color:var(--dim); display:block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:12px }
+  #chans small.last b { display:inline; color:var(--fg); font-weight:600 }
+  #chans .unread { float:right; color:var(--amber); font-size:10px; margin-top:.35rem }
+  #chans .busy { float:right; color:var(--amber); animation:blink 1.2s infinite }
+  @keyframes blink { 50% { opacity:.25 } }
+  @media (prefers-reduced-motion: reduce) { #chans .busy { animation:none } }
+  #newchan { margin:.4rem .6rem; width:calc(100% - 1.2rem) }
+  #identity { border-top:1px solid var(--line); padding:.5rem .6rem; display:grid; gap:.35rem }
+  #identity input { width:100% }
+  #resize { position:absolute; top:0; right:-3px; width:6px; height:100%; cursor:col-resize }
+  #resize:hover, body.resizing #resize { background:var(--human) }
+  body.resizing { user-select:none; cursor:col-resize }
+  /* channel header: name, topic, agents, controls */
+  header { grid-area:head; display:flex; flex-wrap:wrap; gap:.4rem .8rem; align-items:center; padding:.55rem 1rem; border-bottom:1px solid var(--line); background:var(--panel) }
+  #chanName { font-weight:650; font-size:15px } #chanName::before { content:"#"; color:var(--dim); font-weight:400 }
+  #chanTopic { color:var(--dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:38ch }
+  #agents { display:flex; gap:.4rem; flex-wrap:wrap }
+  #agents span { display:inline-flex; align-items:center; gap:.35rem; padding:.15rem .55rem; border:1px solid var(--line); border-radius:999px; font-size:12px; color:var(--dim); max-width:26ch; white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
+  #agents span::before { content:""; width:.5rem; height:.5rem; border-radius:50%; background:var(--faint); flex:none }
+  #agents span b { font-weight:inherit } #agents span em, #agents span i { font-style:normal; white-space:pre }
+  #agents span.claude { color:var(--claude); border-color:color-mix(in srgb, var(--claude) 45%, var(--line)) } #agents span.claude::before { background:var(--claude) }
+  #agents span.codex { color:var(--codex); border-color:color-mix(in srgb, var(--codex) 45%, var(--line)) } #agents span.codex::before { background:var(--codex) }
+  #agents span.running { border-color:var(--amber) } #agents span.running::before { background:var(--amber); animation:blink 1.2s infinite }
+  #agents span.stopped { text-decoration:line-through }
+  #controls { margin-left:auto; display:flex; gap:.4rem; align-items:center }
+  #controls input[type=number] { width:3.6rem }
+  /* timeline */
+  main { grid-area:main; overflow-y:auto; padding:.6rem 1rem 1rem }
+  .msg { display:grid; grid-template-columns:4.2rem 1fr; gap:0 .6rem; padding:.2rem .5rem .2rem 0; border-left:3px solid var(--faint); margin:.15rem 0 0 .2rem; padding-left:.6rem }
+  .msg.human { border-left-color:var(--human) } .msg.claude { border-left-color:var(--claude) } .msg.codex { border-left-color:var(--codex) }
+  .msg.sys { border-left-color:var(--airc); background:var(--sys); border-radius:0 6px 6px 0 }
+  .msg.first { margin-top:.6rem }
+  .msg .time { color:var(--faint); font-size:12px; font-variant-numeric:tabular-nums; padding-top:.15rem }
+  .msg .meta { display:flex; gap:.5rem; align-items:baseline; flex-wrap:wrap; grid-column:2 }
+  .msg .meta b { font-weight:650 } .msg.human .meta b { color:var(--human) } .msg.claude .meta b { color:var(--claude) } .msg.codex .meta b { color:var(--codex) } .msg.sys .meta b { color:var(--airc) }
+  .msg .meta .to { color:var(--dim) } .msg .meta .id { color:var(--faint); font-size:11px; margin-left:auto }
+  .msg:not(.first) .meta { display:none } .msg:not(.first) .time { visibility:hidden } .msg:not(.first):hover .time { visibility:visible }
+  .tag { padding:0 .4rem; border-radius:3px; color:#fff; font-size:11px; font-weight:600 }
+  .tag.done{background:var(--done)} .tag.ask{background:var(--ask)} .tag.blocked{background:var(--blocked)} .tag.waiting{background:var(--wait); color:#1b1b1b}
+  .body { grid-column:2; white-space:pre-wrap; word-break:break-word; max-width:96ch }
+  .body.md { white-space:normal } .body p { margin:.25rem 0 } .body pre { background:#0f1114; padding:.55rem .7rem; overflow-x:auto; border-radius:6px; border:1px solid var(--line) } .body code { font-family:ui-monospace, "JetBrains Mono", Menlo, monospace; font-size:12.5px }
+  .body h1, .body h2, .body h3 { font-size:14px; margin:.5rem 0 .2rem } .body table { border-collapse:collapse } .body td, .body th { border:1px solid var(--line); padding:.15rem .5rem }
+  .msg.eph { border-left-color:transparent; opacity:.7; margin-top:.4rem } .msg.eph .meta { display:flex } .msg.eph .time { visibility:visible }
+  /* hover card for participants */
+  #card { position:fixed; z-index:5; min-width:16rem; max-width:24rem; background:var(--raised); border:1px solid var(--line); border-radius:8px; padding:.6rem .8rem; box-shadow:0 8px 24px rgba(0,0,0,.45); font-size:12.5px; pointer-events:none }
+  #card h4 { margin:0 0 .35rem; font-size:13.5px; display:flex; gap:.5rem; align-items:center }
+  #card h4 i { width:.55rem; height:.55rem; border-radius:50%; background:var(--faint); display:inline-block } #card h4 i.running { background:var(--amber) }
+  #card .human h4 b { color:var(--human) } #card .claude h4 b { color:var(--claude) } #card .codex h4 b { color:var(--codex) } #card .sys h4 b { color:var(--airc) }
+  #card dl { display:grid; grid-template-columns:auto 1fr; gap:.15rem .7rem; margin:0 }
+  #card dt { color:var(--dim) } #card dd { margin:0; word-break:break-all }
+  #card .doing { margin:.2rem 0 .4rem; padding:.3rem .5rem; background:var(--me); border-radius:4px; color:var(--fg) }
+  /* compose */
+  form { grid-area:compose; display:flex; flex-wrap:wrap; gap:.5rem; padding:.5rem 1rem .8rem; border-top:1px solid var(--line); background:var(--panel); position:relative }
+  #hint { flex-basis:100%; min-height:1.1rem; font-size:12px; color:var(--dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
+  #hint b { color:var(--fg); font-weight:600 } #hint span + b { margin-left:1rem }
+  textarea { flex:1; min-height:3.6rem; resize:vertical; background:var(--bg) }
+  #complete { position:absolute; bottom:100%; left:1rem; min-width:14rem; max-width:min(60rem, calc(100% - 2rem)); max-height:14rem; overflow-y:auto; background:var(--raised); border:1px solid var(--line); border-radius:6px 6px 0 0; z-index:1; box-shadow:0 -4px 16px rgba(0,0,0,.35) }
+  #complete div { padding:.3rem .6rem; cursor:pointer; display:flex; gap:.6rem; align-items:baseline }
+  #complete div b { font-weight:600; white-space:nowrap } #complete div small { color:var(--dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
+  #complete div.sel, #complete div:hover { background:var(--me) }
 </style>
 </head>
 <body>
+<aside>
+  <div id="resize" title="Drag to resize"></div>
+  <div id="brand"><i id="conn"></i>airc <span id="status"></span></div>
+  <div id="chans"></div>
+  <input id="newchan" placeholder="new channel…" title="Type a name and press Enter">
+  <div id="identity">
+    <input id="name" placeholder="your nick" title="Your nick (lowercase, digits, dashes)">
+    <input id="token" placeholder="admin token" type="password" title="AIRC_TOKEN">
+  </div>
+</aside>
 <header>
-  <input id="name" placeholder="your nick" size="10" title="Your nick (lowercase, digits, dashes)">
-  <input id="token" placeholder="admin token" size="18" type="password" title="AIRC_TOKEN">
-  <select id="channel" title="Channel"></select>
-  <input id="newchan" placeholder="new channel" size="10">
-  <button type="button" id="lock" title="!lock / !unlock this channel">lock</button>
-  <input id="releaseN" type="number" min="1" value="4" title="Turns to release">
-  <button type="button" id="release" title="!release N: allow N more agent turns past the cap">release</button>
-  <button type="button" id="statusBtn" title="!status">status</button>
-  <span id="status"></span>
+  <b id="chanName"></b><span id="chanTopic"></span>
   <span id="agents"></span>
+  <span id="controls">
+    <button type="button" id="lock" title="Freeze this channel: no agent is woken until unlock">lock</button>
+    <input id="releaseN" type="number" min="1" value="4" title="Turns to release">
+    <button type="button" id="release" title="Allow N more agent turns past the cap and resume paused wakes">release</button>
+    <button type="button" id="statusBtn" title="Post !status">status</button>
+  </span>
 </header>
 <main id="log"></main>
+<div id="card" hidden></div>
 <form id="compose">
-  <textarea id="text" placeholder="@nick message … Ctrl+Enter to send. !help for commands."></textarea>
+  <div id="complete" hidden></div>
+  <div id="hint"></div>
+  <textarea id="text" placeholder="@nick message … Enter to send, Shift+Enter for a new line. !help for commands."></textarea>
   <button type="submit">send</button>
 </form>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/15.0.7/marked.min.js" integrity="sha384-H+hy9ULve6xfxRkWIh/YOtvDdpXgV2fmAGQkIDTxIgZwNoaoBal14Di2YTMR6MzR" crossorigin="anonymous"></script>
@@ -57,21 +131,32 @@
   $('name').value = ls.get('name', 'human');
   $('token').value = ls.get('token', '');
   const headers = () => ({ 'Authorization': 'Bearer ' + $('token').value, 'Content-Type': 'application/json' });
+  let bootID = null;
   const api = async (path, opts) => {
     const r = await fetch(path, { headers: headers(), ...opts });
+    // The server restarted (auto-update): this page is stale, reload to get the new UI.
+    const b = r.headers.get('X-Airc-Boot');
+    if (b) { if (bootID && b !== bootID) location.reload(); bootID = b; }
     if (!r.ok) { const e = await r.json().catch(() => ({ error: r.statusText })); throw new Error(e.error || r.status); }
     return r.json();
   };
   const setStatus = t => { $('status').textContent = t; };
 
   const tagClass = t => t === 'waiting for human' ? 'waiting' : t;
+  // Role of a sender: the provider for agents, human otherwise, sys for the driver.
+  const roleOf = nick => nick === 'airc' ? 'sys' : (known.agents.get(nick) || {}).provider || 'human';
+  let lastFrom = null, lastAt = 0;
   const render = m => {
     const div = document.createElement('div');
-    div.className = 'msg' + (m.from === 'airc' ? ' sys' : m.from === $('name').value ? ' me' : '');
-    const ts = new Date(m.ts).toLocaleTimeString();
+    const at = new Date(m.ts).getTime();
+    // A new block for a new sender, an addressed or tagged message, a command, or a 5 min gap.
+    const first = m.from !== lastFrom || (m.tags || []).length > 0 || !!m.to || m.body.startsWith('!') || at - lastAt > 5 * 60 * 1000;
+    lastFrom = m.from; lastAt = at;
+    div.className = 'msg ' + roleOf(m.from) + (first ? ' first' : '');
+    const ts = new Date(m.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const tags = (m.tags || []).map(t => `<span class="tag ${tagClass(t)}">${t}</span>`).join(' ');
-    const to = m.to ? ` → @${m.to}` : '';
-    div.innerHTML = `<div class="meta"><span>${ts}</span><b>${esc(m.from)}</b><span>${esc(to)}</span>${tags}<span>#${m.id}</span></div><div class="body"></div>`;
+    const to = m.to ? `<span class="to">→ @${esc(m.to)}</span>` : '';
+    div.innerHTML = `<span class="time" title="${esc(new Date(m.ts).toLocaleString())}">${ts}</span><div class="meta"><b data-nick="${esc(m.from)}">${esc(m.from)}</b>${to}${tags}<span class="id">#${m.id}</span></div><div class="body"></div>`;
     const body = div.querySelector('.body');
     // Agent output is untrusted and this page holds the admin token: never set innerHTML unsanitized.
     if (window.marked && window.DOMPurify) { body.classList.add('md'); body.innerHTML = DOMPurify.sanitize(marked.parse(m.body, { breaks: true })); }
@@ -83,6 +168,7 @@
   const append = m => {
     if (m.id <= state.lastId) return;
     state.lastId = m.id;
+    markSeen(m.channel, m.id);
     const log = $('log');
     const stick = log.scrollTop + log.clientHeight >= log.scrollHeight - 40;
     log.appendChild(render(m));
@@ -93,39 +179,188 @@
 
   const connect = () => {
     if (state.es) state.es.close();
-    $('log').innerHTML = ''; state.lastId = 0;
+    $('log').innerHTML = ''; state.lastId = 0; lastFrom = null;
     const url = `/events?channel=${encodeURIComponent(state.channel)}&since=0&token=${encodeURIComponent($('token').value)}`;
     const es = new EventSource(url);
     es.onmessage = e => append(JSON.parse(e.data));
-    es.onopen = () => setStatus('live');
-    es.onerror = () => setStatus('reconnecting…');
+    es.onopen = () => { setStatus(''); $('conn').className = 'live'; };
+    es.onerror = () => { setStatus('reconnecting…'); $('conn').className = 'off'; };
     state.es = es;
   };
 
+  // Sidebar: every channel with its topic; a dot marks activity since it was last viewed here.
+  const seen = JSON.parse(ls.get('seen', '{}') || '{}');
+  const markSeen = (name, id) => { seen[name] = Math.max(seen[name] || 0, id); ls.set('seen', JSON.stringify(seen)); };
+  const switchTo = name => { state.channel = name; ls.set('channel', name); $('chanName').textContent = name; connect(); refreshStatus(); refreshChannels(); };
+  // A renamed or closed channel vanishes from the list: follow a rename we sent, else fall back
+  // to the lobby.
+  const followChannel = chans => {
+    if (chans.some(c => c.name === state.channel) || state.lastId === 0) return;
+    const target = state.renameTo && chans.some(c => c.name === state.renameTo) ? state.renameTo : 'lobby';
+    state.renameTo = null;
+    switchTo(target);
+  };
   const refreshChannels = async () => {
     const chans = await api('/channels');
-    const names = new Set(chans.map(c => c.name)); names.add(state.channel); names.add('lobby');
-    const sel = $('channel'); sel.innerHTML = '';
-    [...names].sort().forEach(n => { const o = document.createElement('option'); o.value = o.textContent = n; sel.appendChild(o); });
-    sel.value = state.channel;
+    followChannel(chans);
+    const byName = new Map(chans.map(c => [c.name, c]));
+    for (const n of [state.channel, 'lobby']) if (!byName.has(n)) byName.set(n, { name: n, topic: '', last_id: 0 });
+    $('chanName').textContent = state.channel;
+    const cur = byName.get(state.channel);
+    $('chanTopic').textContent = cur && cur.topic ? '· ' + cur.topic : '';
+    $('chanTopic').title = (cur && cur.topic) || '';
+    const busy = name => [...known.status.values()].filter(a => a.channel === name && a.state === 'running').map(a => a.nick);
+    // The lobby is the control room: pinned first, the rest alphabetical.
+    const order = (a, b) => (b.name === 'lobby') - (a.name === 'lobby') || a.name.localeCompare(b.name);
+    $('chans').replaceChildren(...[...byName.values()].sort(order).map(c => {
+      const d = document.createElement('div');
+      d.className = c.name === state.channel ? 'cur' : '';
+      const unread = c.name !== state.channel && c.last_id > (seen[c.name] || 0);
+      const working = busy(c.name);
+      const light = working.length ? `<span class="busy" title="${esc(working.join(', '))} working">⏳</span>` : unread ? '<span class="unread">●</span>' : '';
+      const last = c.last_from ? `<small class="last"><b>${esc(c.last_from)}</b>: ${esc(c.last_body || '')}</small>` : '';
+      d.innerHTML = `${light}<b>#${esc(c.name)}</b><small>${esc(c.topic || '')}</small>${last}`;
+      d.title = [c.topic, c.cwd ? 'cwd: ' + c.cwd : '', working.length ? 'working: ' + working.join(', ') : ''].filter(Boolean).join('\n') || c.name;
+      d.onclick = () => switchTo(c.name);
+      return d;
+    }));
   };
-  const refreshAgents = async () => {
-    const agents = await api('/agents').catch(() => []);
-    $('agents').innerHTML = agents.filter(a => a.channel === state.channel)
-      .map(a => `<span class="${a.enabled ? '' : 'stopped'}" title="${a.provider} ${a.sandbox} session ${a.session_id || '-'}">@${a.nick} ${a.turns}t</span>`).join('');
+  // Live agent state: polled, never posted on the bus (bus lines would land in every agent prompt).
+  const live = { prev: new Map() };
+  const fmtSince = iso => { const s = Math.max(0, Math.round((Date.now() - new Date(iso)) / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
+  const ephemeral = text => {
+    const log = $('log'), stick = log.scrollTop + log.clientHeight >= log.scrollHeight - 40;
+    const div = document.createElement('div'); div.className = 'msg eph';
+    div.innerHTML = `<span class="time">${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span><div class="meta"><span>${esc(text)}</span></div>`;
+    lastFrom = null;
+    log.appendChild(div); if (stick) log.scrollTop = log.scrollHeight;
   };
+  // Tooltip text for a nick: role, provider, sandbox, declared activity, live state, cwd, session.
+  const known = { agents: new Map(), status: new Map() };
+  const describe = nick => {
+    const a = known.agents.get(nick), s = known.status.get(nick);
+    if (!a) return nick === 'airc' ? 'airc: the driver' : `${nick}: human operator`;
+    const role = a.nick.startsWith(a.provider + '-') ? a.nick.slice(a.provider.length + 1) : a.nick;
+    const lines = [`${a.nick} · role: ${role} · ${a.provider} · ${a.sandbox === 'rw' ? 'read-write' : 'read-only'}`];
+    if (s && s.activity) lines.push(`doing: ${s.activity}`);
+    if (s) lines.push(`state: ${s.state}${s.state === 'running' ? ' since ' + fmtSince(s.since) : ''} · ${s.turns} turns${s.queued ? ` · ${s.queued} queued` : ''}`);
+    lines.push(`cwd: ${a.cwd}`);
+    if (a.home) lines.push(`home: ${a.home}`);
+    if (a.session_id) lines.push(`session: ${a.session_id}`);
+    return lines.join('\n');
+  };
+  // Hover card: one element, filled from the cached agents/status, shown next to the hovered nick.
+  const card = { el: null, nick: null, timer: 0 };
+  const showCard = (el, nick) => {
+    const a = known.agents.get(nick), st = known.status.get(nick), box = $('card');
+    const role = a ? (a.nick.startsWith(a.provider + '-') ? a.nick.slice(a.provider.length + 1) : a.nick) : (nick === 'airc' ? 'driver' : 'operator');
+    const cls = a ? a.provider : nick === 'airc' ? 'sys' : 'human';
+    const rows = [];
+    if (a) {
+      rows.push(['provider', a.provider], ['sandbox', a.sandbox === 'rw' ? 'read-write' : 'read-only']);
+      if (st) rows.push(['state', st.state === 'running' ? `running for ${fmtSince(st.since)} (on #${st.trigger})` : st.state + (st.queued ? `, ${st.queued} queued` : '')], ['turns', String(st.turns)]);
+      rows.push(['cwd', a.cwd]);
+      if (a.home) rows.push(['home', a.home]);
+      if (a.session_id) rows.push(['session', a.session_id]);
+      if (a.tools && a.tools.length) rows.push(['tools', a.tools.join(', ')]);
+    }
+    const doing = st && st.activity ? `<div class="doing">${esc(st.activity)}</div>` : '';
+    box.innerHTML = `<div class="${cls}"><h4><i class="${st && st.state === 'running' ? 'running' : ''}"></i><b>${esc(nick)}</b><span>${esc(role)}</span></h4>${doing}<dl>${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl></div>`;
+    box.hidden = false;
+    const r = el.getBoundingClientRect(), w = box.offsetWidth, h = box.offsetHeight;
+    let x = Math.min(r.left, window.innerWidth - w - 8), y = r.bottom + 6;
+    if (y + h > window.innerHeight - 8) y = r.top - h - 6;
+    box.style.left = Math.max(8, x) + 'px'; box.style.top = Math.max(8, y) + 'px';
+    card.el = el; card.nick = nick;
+  };
+  const hideCard = () => { clearTimeout(card.timer); $('card').hidden = true; card.el = card.nick = null; };
+  document.addEventListener('mouseover', e => {
+    const el = e.target.closest('[data-nick]');
+    if (!el) return;
+    clearTimeout(card.timer);
+    card.timer = setTimeout(() => showCard(el, el.dataset.nick), 120);
+  });
+  document.addEventListener('mouseout', e => { const el = e.target.closest('[data-nick]'); if (el && !el.contains(e.relatedTarget)) hideCard(); });
+  // Safety net: a card whose anchor left the document or the pointer is closed on the next move.
+  document.addEventListener('mousemove', e => { if (card.el && !card.el.isConnected) hideCard(); });
+  document.addEventListener('scroll', hideCard, true);
+  const refreshStatus = async () => {
+    const st = await api('/status').catch(() => null); if (!st) return;
+    const agents = await api('/agents').catch(() => null);
+    if (agents) known.agents = new Map(agents.map(a => [a.nick, a]));
+    known.status = new Map(st.map(a => [a.nick, a]));
+    const here = st.filter(a => a.channel === state.channel);
+    // Chips are updated in place, never re-created: a hovered chip keeps its identity, so the
+    // hover card stays anchored and :hover holds while the timer text ticks.
+    const box = $('agents'), want = new Set();
+    const setText = (n, t) => { if (n.textContent !== t) n.textContent = t; };
+    for (const a of here) {
+      want.add(a.nick);
+      let el = box.querySelector(`[data-nick="${CSS.escape(a.nick)}"]`);
+      if (!el) { el = document.createElement('span'); el.dataset.nick = a.nick; el.innerHTML = '<b></b><em></em><i></i>'; box.appendChild(el); }
+      const cls = roleOf(a.nick) + (a.state === 'running' ? ' running' : a.state === 'stopped' ? ' stopped' : '');
+      if (el.className !== cls) el.className = cls;
+      setText(el.children[0], '@' + a.nick);
+      setText(el.children[1], a.state === 'running' ? ` ⏳ ${fmtSince(a.since)}` : a.queued ? ` (${a.queued} queued)` : '');
+      setText(el.children[2], a.activity ? ` · ${a.activity}` : '');
+    }
+    for (const el of [...box.children]) if (!want.has(el.dataset.nick)) el.remove();
+    if (card.el) { if (card.el.isConnected) showCard(card.el, card.nick); else hideCard(); } // keep an open card fresh
+    for (const a of here) {
+      const p = live.prev.get(a.nick);
+      if (p && p !== a.state) {
+        if (a.state === 'running') ephemeral(`⏳ ${a.nick} started a turn on #${a.trigger}`);
+        else if (p === 'running') ephemeral(`✓ ${a.nick} finished (${a.turns} turns)`);
+      }
+      live.prev.set(a.nick, a.state);
+    }
+  };
+  const refreshAgents = refreshStatus;
+  // Sent-message history, recalled with ArrowUp/ArrowDown from the first/last line, like a shell.
+  const hist = { items: (() => { try { const v = JSON.parse(ls.get('history', '[]')); return Array.isArray(v) ? v : []; } catch { return []; } })(), idx: -1, draft: '' };
   const send = async body => {
     body = body.trim(); if (!body) return;
-    try { await api('/msg', { method: 'POST', body: JSON.stringify({ channel: state.channel, from: $('name').value, body }) }); $('text').value = ''; }
-    catch (e) { setStatus('send failed: ' + e.message); }
+    try {
+      await api('/msg', { method: 'POST', body: JSON.stringify({ channel: state.channel, from: $('name').value, body }) });
+      $('text').value = '';
+      $('text').dispatchEvent(new Event('input')); // clears the command help line
+      const rn = /^!rename\s+([a-z0-9][a-z0-9-]*)\s*$/.exec(body);
+      if (rn) { state.renameTo = rn[1]; setTimeout(refreshChannels, 300); }
+      if (hist.items[hist.items.length - 1] !== body) { hist.items.push(body); hist.items = hist.items.slice(-50); ls.set('history', JSON.stringify(hist.items)); }
+      hist.idx = -1;
+    } catch (e) { setStatus('send failed: ' + e.message); }
+  };
+  const recall = dir => {
+    const ta = $('text');
+    if (hist.idx === -1) { if (dir > 0) return false; hist.draft = ta.value; hist.idx = hist.items.length; }
+    const next = hist.idx + dir;
+    if (next < 0 || next > hist.items.length) return false;
+    hist.idx = next;
+    ta.value = next === hist.items.length ? (hist.idx = -1, hist.draft) : hist.items[next];
+    ta.setSelectionRange(ta.value.length, ta.value.length);
+    return true;
   };
 
   $('compose').onsubmit = e => { e.preventDefault(); send($('text').value); };
-  $('text').onkeydown = e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); send($('text').value); } };
+  $('text').onkeydown = e => {
+    // Enter sends, Shift+Enter inserts a newline (Ctrl+Enter still sends).
+    if (e.key === 'Enter' && !e.shiftKey && !e.altKey) { e.preventDefault(); send($('text').value); return; }
+    if (!$('complete').hidden) return; // the completion popup owns the arrows while open
+    const ta = e.target, before = ta.value.slice(0, ta.selectionStart), after = ta.value.slice(ta.selectionEnd);
+    if (e.key === 'ArrowUp' && !before.includes('\n') && recall(-1)) e.preventDefault();
+    else if (e.key === 'ArrowDown' && !after.includes('\n') && recall(1)) e.preventDefault();
+  };
   $('name').onchange = () => ls.set('name', $('name').value);
   $('token').onchange = () => { ls.set('token', $('token').value); boot(); };
-  $('channel').onchange = () => { state.channel = $('channel').value; ls.set('channel', state.channel); connect(); refreshAgents(); };
-  $('newchan').onchange = () => { const n = $('newchan').value.trim(); if (!n) return; state.channel = n; ls.set('channel', n); $('newchan').value = ''; refreshChannels().then(() => { connect(); refreshAgents(); }); };
+  // Resizable sidebar: drag the right edge; the width is remembered per browser.
+  try { const w = ls.get('side', ''); if (w) document.documentElement.style.setProperty('--side', w); } catch {}
+  $('resize').onmousedown = e => {
+    e.preventDefault(); document.body.classList.add('resizing');
+    const move = ev => document.documentElement.style.setProperty('--side', Math.min(Math.max(ev.clientX, 120), window.innerWidth / 2) + 'px');
+    const up = () => { document.body.classList.remove('resizing'); ls.set('side', document.documentElement.style.getPropertyValue('--side')); removeEventListener('mousemove', move); removeEventListener('mouseup', up); };
+    addEventListener('mousemove', move); addEventListener('mouseup', up);
+  };
+  $('newchan').onchange = () => { const n = $('newchan').value.trim().toLowerCase(); if (!/^[a-z0-9][a-z0-9-]{0,31}$/.test(n)) { setStatus('channel: lowercase, digits, dashes'); return; } $('newchan').value = ''; switchTo(n); };
   $('lock').onclick = () => send(state.locked ? '!unlock' : '!lock');
   $('release').onclick = () => send('!release ' + Math.max(1, parseInt($('releaseN').value, 10) || 1));
   $('statusBtn').onclick = () => send('!status');
@@ -133,10 +368,135 @@
   const boot = async () => {
     if (!$('token').value) { setStatus('paste the admin token (AIRC_TOKEN)'); return; }
     try { await refreshChannels(); await refreshAgents(); connect(); }
-    catch (e) { setStatus('auth failed: ' + e.message); }
+    catch (e) { setStatus('load failed: ' + e.message); }
   };
   boot();
-  setInterval(() => { if ($('token').value) refreshAgents(); }, 10000);
+  setInterval(() => { if ($('token').value) refreshStatus(); }, 2000);
+  setInterval(() => { if ($('token').value) refreshChannels().catch(() => {}); }, 3000);
+
+  // Tab completion: commands, @nicks, !spawn arguments. Registered in the capture phase so it runs
+  // before the send/history handler above and can swallow the keys it consumes while the popup is open.
+  (() => {
+    const ta = $('text'), box = $('complete');
+    const DESC = {
+      '!spawn': 'start or update an agent: nick [provider] [channel] [cwd] [--sandbox ro|rw] [--tools a,b] [--home dir] [--session id]',
+      '!stop': 'disable an agent (session kept)', '!kill': 'abort an agent\'s running turn', '!status': 'agents, states, budgets of this channel',
+      '!release': 'allow N more agent turns past the cap and resume paused wakes', '!lock': 'freeze this channel: no agent is woken', '!unlock': 'resume the channel',
+      '!cwd': 'show or set this channel\'s workspace (default cwd for !spawn)', '!topic': 'show or set this channel\'s title',
+      '!rename': 'rename this channel (messages, agents, settings follow)', '!close': 'archive this channel and stop its agents', '!open': 'reopen an archived channel', '!help': 'list the commands',
+      '--sandbox': 'ro (read-only) or rw (edits allowed)', '--tools': 'extra allowed tools, comma-separated, e.g. Bash(git:*)', '--home': 'CLAUDE_CONFIG_DIR / CODEX_HOME for this agent', '--session': 'resume an existing Claude session or Codex thread', '--model': 'model name passed to the CLI (claude --model / codex model=)',
+    };
+    const CMDS = Object.keys(DESC).filter(k => k[0] === '!');
+    const PROV = ['claude', 'codex'], FLAGS = ['--sandbox', '--tools', '--home', '--session', '--model'];
+    const cache = {};
+    // Fresh cache hit returns the array itself so a Tab with nothing to complete can fall through synchronously.
+    const cached = path => {
+      const c = cache[path];
+      if (c && Date.now() - c.t < 5000) return c.v;
+      return api(path).catch(() => []).then(v => (cache[path] = { t: Date.now(), v }).v);
+    };
+    const map = (r, f) => r.then ? r.then(f) : f(r);
+    // Own channel first as @nick; agents elsewhere as @channel:nick (relayed by the driver).
+    const nicks = () => map(cached('/agents'), a => [...a.filter(x => x.channel === state.channel).map(x => x.nick),
+      ...a.filter(x => x.channel !== state.channel).map(x => x.channel + ':' + x.nick)]);
+    const chans = () => map(cached('/channels'), c => [...new Set([state.channel, ...c.map(x => x.name)])]);
+    const isFlag = s => s.startsWith('--') && !s.includes('=');
+    // before: text up to the caret; word: its trailing non-blank run. Returns an array, a promise, or null.
+    const candidates = (before, word) => {
+      if (word[0] === '@') return map(nicks(), n => n.map(x => '@' + x));
+      if (before.includes('\n')) return null; // the driver parses commands from the first line only
+      const t = before.trimStart().split(/\s+/), prev = t[t.length - 2] || '';
+      if (t.length === 1) return word[0] === '!' ? CMDS : null;
+      if (t[0] === '!stop' || t[0] === '!kill') return t.length === 2 ? nicks() : null;
+      if (t[0] !== '!spawn') return null;
+      if (prev === '--sandbox') return ['ro', 'rw'];
+      if (isFlag(prev)) return null; // --tools/--home/--session values are free text
+      if (word[0] === '-') return FLAGS;
+      const args = t.slice(1, -1).filter((a, i, all) => a[0] !== '-' && !(i && isFlag(all[i - 1])));
+      if (args.length === 1) return PROV.includes(args[0].split('-')[0]) ? chans() : PROV;
+      if (args.length === 2) return PROV.includes(args[1]) ? chans() : null;
+      return null;
+    };
+
+    // Persistent help: the usage of the command being typed and of the flag being filled, or, while
+    // the popup is open, the description of the highlighted proposal.
+    const hintFor = c => {
+      if (DESC[c]) return [c, DESC[c]];
+      if (c[0] === '@') {
+        const nick = c.slice(1).split(':').pop(), a = known.agents.get(nick), st = known.status.get(nick);
+        if (!a) return [c, 'human operator'];
+        return [c, `${a.provider}, ${a.sandbox === 'rw' ? 'read-write' : 'read-only'}, ${st ? st.state : 'unknown'}${st && st.activity ? ' · ' + st.activity : ''} · ${a.channel}`];
+      }
+      return null;
+    };
+    const setHint = parts => $('hint').replaceChildren(...parts.flatMap(([k, v]) => { const b = document.createElement('b'); b.textContent = k; const sp = document.createElement('span'); sp.textContent = ' ' + v; return [b, sp]; }));
+    const hint = () => {
+      const line = ta.value.split('\n')[0];
+      if (!line.startsWith('!')) return setHint([]);
+      const t = line.trimStart().split(/\s+/), cmd = t[0], flag = [...t].reverse().find(isFlag);
+      const parts = [];
+      if (DESC[cmd]) parts.push([cmd, DESC[cmd]]);
+      if (flag && DESC[flag] && cmd === '!spawn') parts.push([flag, DESC[flag]]);
+      setHint(parts);
+    };
+    const cmp = { base: [], list: [], i: 0, start: 0 };
+    const close = () => { box.hidden = true; cmp.base = []; hint(); };
+    const filter = () => { const w = ta.value.slice(cmp.start, ta.selectionStart); return cmp.base.filter(c => c.startsWith(w)); };
+    const accept = c => { ta.setRangeText(c + ' ', cmp.start, ta.selectionStart, 'end'); close(); ta.focus(); };
+    const show = () => {
+      box.replaceChildren(...cmp.list.map((c, i) => {
+        const d = document.createElement('div'); d.className = i === cmp.i ? 'sel' : ''; d.onclick = () => accept(c);
+        const name = document.createElement('b'); name.textContent = c; d.appendChild(name);
+        if (DESC[c]) { const h = document.createElement('small'); h.textContent = DESC[c]; d.appendChild(h); }
+        if (c[0] === '@') d.dataset.nick = c.slice(1).split(':').pop();
+        return d;
+      }));
+      box.hidden = false; box.children[cmp.i].scrollIntoView({ block: 'nearest' });
+      const h = hintFor(cmp.list[cmp.i]); if (h) setHint([h]);
+    };
+    // suggest: opened by typing, so a single candidate is shown, never auto-inserted.
+    const open = (base, start, suggest) => {
+      cmp.base = base; cmp.start = start; cmp.i = 0; cmp.list = filter();
+      const typed = ta.value.slice(start, ta.selectionStart);
+      if (!cmp.list.length || (suggest && cmp.list.length === 1 && cmp.list[0] === typed)) close();
+      else if (cmp.list.length === 1 && !suggest) accept(cmp.list[0]);
+      else show();
+    };
+
+    ta.addEventListener('keydown', e => {
+      const eat = () => { e.preventDefault(); e.stopImmediatePropagation(); };
+      if (!box.hidden) {
+        const n = cmp.list.length;
+        if (e.key === 'Tab' || e.key === 'ArrowDown') { eat(); cmp.i = (cmp.i + 1) % n; show(); }
+        else if (e.key === 'ArrowUp') { eat(); cmp.i = (cmp.i + n - 1) % n; show(); }
+        else if (e.key === 'Escape') { eat(); close(); }
+        else if (e.key === 'Enter') { if (e.ctrlKey || e.metaKey) close(); else { eat(); accept(cmp.list[cmp.i]); } }
+        return;
+      }
+      if (e.key !== 'Tab' || e.shiftKey) return;
+      const pos = ta.selectionStart, before = ta.value.slice(0, pos), word = /\S*$/.exec(before)[0], start = pos - word.length;
+      const r = candidates(before, word);
+      if (!r) return;
+      if (r.then) { eat(); r.then(list => open(list, start)); }
+      else if (r.some(c => c.startsWith(word))) { eat(); open(r, start); }
+    }, true);
+    ta.addEventListener('input', () => {
+      if (!box.hidden) {
+        cmp.list = ta.selectionStart < cmp.start ? [] : filter(); cmp.i = 0;
+        if (cmp.list.length) return show();
+        close(); // nothing left under the old prefix: fall through and suggest afresh
+      }
+      // Suggest as you type: @nick, !command, spawn arguments.
+      const pos = ta.selectionStart, before = ta.value.slice(0, pos), word = /\S*$/.exec(before)[0], start = pos - word.length;
+      if (!word) return;
+      const r = candidates(before, word);
+      if (!r) return;
+      map(r, list => { if (ta.selectionStart === pos) open(list, start, true); });
+    });
+    ta.addEventListener('input', hint);
+    ta.addEventListener('blur', close);
+    box.onmousedown = e => e.preventDefault(); // keep the textarea focused so blur does not close the popup before the click lands
+  })();
 })();
 </script>
 </body>

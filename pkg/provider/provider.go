@@ -20,6 +20,8 @@ type Turn struct {
 	Cwd       string
 	// Sandbox is "ro" or "rw".
 	Sandbox string
+	// Model overrides the CLI's default model when set.
+	Model string
 	// Tools are extra allowed tools (Claude syntax, e.g. "Bash(git:*)"). Ignored by Codex.
 	Tools []string
 	// Protocol is the bus conventions text, injected as system prompt or prompt prefix.

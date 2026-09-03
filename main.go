@@ -24,6 +24,7 @@ import (
 	"airc/pkg/bus"
 	"airc/pkg/driver"
 	"airc/pkg/provider"
+	"airc/pkg/restart"
 	"airc/pkg/store"
 	"airc/pkg/web"
 )
@@ -97,7 +98,18 @@ func adminToken(ctx context.Context, st *store.Store) (string, bool, error) {
 }
 
 func main() {
-	if err := run(); err != nil {
+	err := run()
+	if errors.Is(err, restart.ErrUpdated) {
+		// Everything is closed by now (run returned): replace the process in place, same pid,
+		// same environment, same arguments.
+		exe, xerr := os.Executable()
+		if xerr == nil {
+			xerr = syscall.Exec(exe, os.Args, os.Environ()) //nolint:gosec // re-exec of our own binary
+		}
+		fmt.Fprintf(os.Stderr, "airc: re-exec failed: %v\n", xerr)
+		os.Exit(1)
+	}
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "airc: %v\n", err)
 		os.Exit(1)
 	}
@@ -138,8 +150,8 @@ func run() error {
 	prometheus.MustRegister(prometheus.NewCounterFunc(prometheus.CounterOpts{Name: "airc_bus_dropped_total", Help: "Broadcasts lost to full subscriber buffers."},
 		func() float64 { return float64(b.Dropped()) }))
 	providers := []provider.Provider{
-		provider.Claude{Bin: getEnv("AIRC_CLAUDE_BIN", "claude")},
-		provider.Codex{Bin: getEnv("AIRC_CODEX_BIN", "codex")},
+		provider.Claude{Bin: getEnv("AIRC_CLAUDE_BIN", "claude"), Mode: getEnv("AIRC_CLAUDE_MODE", "auto")},
+		provider.Codex{Bin: getEnv("AIRC_CODEX_BIN", "codex"), Strict: os.Getenv("AIRC_CODEX_STRICT") == "1"},
 	}
 	d := driver.New(b, providers, driver.Config{
 		BaseURL:         getEnv("AIRC_URL", "http://"+addr),
@@ -151,9 +163,10 @@ func run() error {
 		NtfyURL:         os.Getenv("AIRC_NTFY_URL"),
 	}, logger)
 
+	boot := hex.EncodeToString(func() []byte { b := make([]byte, 8); _, _ = rand.Read(b); return b }())
 	appSrv := &http.Server{
 		Addr:    addr,
-		Handler: web.New(b, token, logger).Handler(),
+		Handler: web.New(b, token, logger, d.Status, boot).Handler(),
 		// No WriteTimeout: /events is a long-lived SSE stream.
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       120 * time.Second,
@@ -178,8 +191,28 @@ func run() error {
 		}
 		return err
 	})
+	if os.Getenv("AIRC_AUTO_RESTART") == "1" {
+		exe, err := os.Executable()
+		if err != nil {
+			return fmt.Errorf("auto restart: %w", err)
+		}
+		g.Go(func() error {
+			err := restart.Watch(gctx, exe, 2*time.Second, d.Idle, func(ev string) { logger.Info(ev, zap.String("exe", exe)) })
+			if errors.Is(err, context.Canceled) {
+				return nil
+			}
+			if errors.Is(err, restart.ErrUpdated) {
+				logger.Info("restarting_on_update", zap.String("exe", exe))
+			}
+			return err
+		})
+	}
 	logger.Info("ready", zap.String("ui", "http://"+addr+"/"))
 	err = g.Wait()
 	logger.Info("shutdown")
+	if errors.Is(err, restart.ErrUpdated) {
+		// Not a failure: the servers drained because we asked them to.
+		_ = logger.Sync()
+	}
 	return err
 }

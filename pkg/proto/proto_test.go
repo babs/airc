@@ -14,6 +14,8 @@ func TestAddress(t *testing.T) {
 		"@claude-impl first\n@codex-review second":                     "claude-impl",
 		"see `@codex-review` inline\n  @codex-review indented":         "codex-review",
 		"email me@example.com\nno address":                             "",
+		"@task-1:claude-impl please look":                              "task-1:claude-impl",
+		"@task-1: nothing":                                             "task-1",
 		"@Bad_Nick x":                                                  "",
 		"@a":                                                           "a",
 		"":                                                             "",
@@ -44,6 +46,21 @@ func TestTags(t *testing.T) {
 	}
 }
 
+func TestStatus(t *testing.T) {
+	cases := map[string]string{
+		"done [status: reviewing calc.py] [done]": "reviewing calc.py",
+		"[STATUS:  waiting on tests  ]":           "waiting on tests",
+		"no status here [done]":                   "",
+		"[status: ]":                              "",
+		"[status: a\nb]":                          "",
+	}
+	for in, want := range cases {
+		if got := Status(in); got != want {
+			t.Errorf("Status(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestParseCommand(t *testing.T) {
 	c, err := ParseCommand("!spawn claude-impl claude task-1 /wt/x --sandbox rw --tools=Bash(git:*),Bash(curl:*) --dry\nignored")
 	if err != nil {
@@ -62,5 +79,11 @@ func TestParseCommand(t *testing.T) {
 	}
 	if !ValidNick("claude-impl-2") || ValidNick("-x") || ValidNick("Up") || ValidNick("") {
 		t.Fatal("ValidNick")
+	}
+	if !ValidAddress("task-1:claude-impl") || !ValidAddress("claude-impl") || ValidAddress("Bad:x") || ValidAddress("a:b:c") {
+		t.Fatal("ValidAddress")
+	}
+	if c, n := SplitAddress("task-1:claude-impl"); c != "task-1" || n != "claude-impl" {
+		t.Fatal("SplitAddress")
 	}
 }

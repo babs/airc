@@ -21,21 +21,37 @@ const SystemNick = "airc"
 
 var (
 	nickRe    = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
-	addressRe = regexp.MustCompile(`(?m)^[ \t]*@([a-z0-9][a-z0-9-]{0,31})\b`)
+	addressRe = regexp.MustCompile(`(?m)^[ \t]*@([a-z0-9][a-z0-9-]{0,31}(?::[a-z0-9][a-z0-9-]{0,31})?)\b`)
 	tagRe     = regexp.MustCompile(`(?i)\[(done|ask|blocked|waiting for human)\]`)
+	statusRe  = regexp.MustCompile(`(?i)\[status:\s*([^\]\n]{1,200})\]`)
 )
 
 // ValidNick reports whether s is an acceptable nick or channel name.
 func ValidNick(s string) bool { return nickRe.MatchString(s) }
 
-// Address returns the nick a body addresses: the first line that starts with "@nick". Agents put
-// a summary first and the addressee at the end, so any line counts, not only the first.
+// Address returns the nick a body addresses: the first line that starts with "@nick" or, IRC
+// style, "@channel:nick" for an agent living in another channel. Agents put a summary first and
+// the addressee at the end, so any line counts, not only the first.
 func Address(body string) string {
 	m := addressRe.FindStringSubmatch(body)
 	if m == nil {
 		return ""
 	}
 	return m[1]
+}
+
+// SplitAddress separates "channel:nick" into its parts; channel is empty for a bare nick.
+func SplitAddress(to string) (channel, nick string) {
+	if c, n, ok := strings.Cut(to, ":"); ok {
+		return c, n
+	}
+	return "", to
+}
+
+// ValidAddress reports whether to is a nick or a channel:nick pair.
+func ValidAddress(to string) bool {
+	c, n := SplitAddress(to)
+	return ValidNick(n) && (c == "" || ValidNick(c))
 }
 
 // Tags extracts the end-of-turn tags present anywhere in body, lower-cased, deduplicated, in order.
@@ -50,6 +66,15 @@ func Tags(body string) []string {
 		}
 	}
 	return out
+}
+
+// Status extracts a self-declared "[status: ...]" line from body; empty if none.
+func Status(body string) string {
+	m := statusRe.FindStringSubmatch(body)
+	if m == nil {
+		return ""
+	}
+	return strings.TrimSpace(m[1])
 }
 
 // HasTag reports whether tags contains tag.

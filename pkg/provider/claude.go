@@ -13,6 +13,8 @@ import (
 type Claude struct {
 	// Bin is the executable; default "claude".
 	Bin string
+	// Mode is the permission mode for rw agents; default "auto". Never bypassPermissions.
+	Mode string
 }
 
 // Name implements Provider.
@@ -31,6 +33,9 @@ func (c Claude) Run(ctx context.Context, t Turn) (Result, error) {
 		sid, first = newUUID(), true
 	}
 	args := []string{"-p", "--output-format", "json"}
+	if t.Model != "" {
+		args = append(args, "--model", t.Model)
+	}
 	if first {
 		args = append(args, "--session-id", sid)
 	} else {
@@ -39,7 +44,10 @@ func (c Claude) Run(ctx context.Context, t Turn) (Result, error) {
 	// "ro": default mode denies edits in -p (no prompt possible), so the agent can only read.
 	mode := "default"
 	if t.Sandbox == "rw" {
-		mode = "acceptEdits"
+		mode = c.Mode
+		if mode == "" {
+			mode = "auto"
+		}
 	}
 	args = append(args, "--permission-mode", mode)
 	if len(t.Tools) > 0 {

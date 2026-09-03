@@ -73,7 +73,7 @@ func TestClaudeRunArgsAndSessionLost(t *testing.T) {
 echo '{"session_id":"","result":"ok"}'`)
 	env := []string{"ARGS_FILE=" + args}
 	c := Claude{Bin: bin}
-	r, err := c.Run(context.Background(), Turn{Cwd: t.TempDir(), Sandbox: "rw", Tools: []string{"Bash(git:*)"}, Protocol: "P", Prompt: "hi", Env: env})
+	r, err := c.Run(context.Background(), Turn{Cwd: t.TempDir(), Sandbox: "rw", Model: "claude-sonnet-5", Tools: []string{"Bash(git:*)"}, Protocol: "P", Prompt: "hi", Env: env})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +81,7 @@ echo '{"session_id":"","result":"ok"}'`)
 		t.Fatalf("%+v", r)
 	}
 	got, _ := os.ReadFile(args)
-	for _, want := range []string{"--session-id\n" + r.SessionID, "--permission-mode\nacceptEdits", "--allowedTools\nBash(git:*)", "--append-system-prompt\nP"} {
+	for _, want := range []string{"--session-id\n" + r.SessionID, "--permission-mode\nauto", "--allowedTools\nBash(git:*)", "--append-system-prompt\nP", "--model\nclaude-sonnet-5"} {
 		if !strings.Contains(string(got), want) {
 			t.Errorf("args missing %q in:\n%s", want, got)
 		}
@@ -107,12 +107,12 @@ func TestCodexRunArgs(t *testing.T) {
 	bin := fakeBin(t, `echo '{"type":"thread.started","thread_id":"t9"}'; echo '{"type":"item.completed","item":{"type":"agent_message","text":"yo"}}'`)
 	env := []string{"ARGS_FILE=" + args}
 	c := Codex{Bin: bin}
-	r, err := c.Run(context.Background(), Turn{Cwd: t.TempDir(), Sandbox: "ro", Protocol: "P", Prompt: "hi", Env: env})
+	r, err := c.Run(context.Background(), Turn{Cwd: t.TempDir(), Sandbox: "ro", Model: "gpt-5-codex", Protocol: "P", Prompt: "hi", Env: env})
 	if err != nil || r.SessionID != "t9" || r.Text != "yo" {
 		t.Fatalf("%v %+v", err, r)
 	}
 	got, _ := os.ReadFile(args)
-	for _, want := range []string{"exec\n-C\n", "-s\nread-only", "--json", `approval_policy="never"`, "\n-\n"} {
+	for _, want := range []string{"exec\n-C\n", "-s\nread-only", "--json", `approval_policy="never"`, "\n-\n", `model="gpt-5-codex"`} {
 		if !strings.Contains(string(got), want) {
 			t.Errorf("first turn args missing %q in:\n%s", want, got)
 		}
@@ -125,8 +125,21 @@ func TestCodexRunArgs(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, _ = os.ReadFile(args)
-	if !strings.Contains(string(got), "exec\nresume\nt9\n") || !strings.Contains(string(got), `sandbox_mode="workspace-write"`) || strings.Contains(string(got), "\n-s\n") {
-		t.Errorf("resume args:\n%s", got)
+	for _, want := range []string{"exec\nresume\nt9\n", `sandbox_mode="workspace-write"`, `approvals_reviewer="auto_review"`, `approval_policy="on-request"`, "network_access=true"} {
+		if !strings.Contains(string(got), want) {
+			t.Errorf("rw resume args missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(string(got), "\n-s\n") {
+		t.Errorf("resume must not pass -s:\n%s", got)
+	}
+	_, err = Codex{Bin: bin, Strict: true}.Run(context.Background(), Turn{SessionID: "t9", Cwd: t.TempDir(), Sandbox: "rw", Prompt: "x", Env: env})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ = os.ReadFile(args)
+	if !strings.Contains(string(got), `approval_policy="never"`) || strings.Contains(string(got), "auto_review") {
+		t.Errorf("strict rw args:\n%s", got)
 	}
 }
 

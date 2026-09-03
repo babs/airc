@@ -79,3 +79,88 @@ Also seen: Claude's global `CLAUDE.md` applies inside a driven session (it tried
 Fixed: cross-channel wakes (an `@nick` from another channel ran a turn on an empty delta), system notices replayed as wakes after a restart (they address the agent), failed or interrupted turns consuming the wake for good (now rolled back and parked; `!release` or a restart replays them), agent tokens listing every channel and agent, `--tools=--flag` reaching Claude's argv, non-atomic grant decrement, `!unlock` not resuming, stopped agents keeping a valid token, SSE heartbeat not catching up, 1 MiB message bodies, SRI on the two CDN scripts, and a timeout test that never timed out.
 
 Waived: the agent inherits the operator's environment (minus `AIRC_*` and `CLAUDECODE*`). An allowlist would break the CLIs in ways I cannot enumerate (auth, proxies, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, certificates). An interactive Claude Code session has the same environment; the POC does not claim to sandbox better than the CLIs themselves do.
+
+## 2026-09-03 Live status is polled, not posted
+
+Feedback while testing: nothing tells the operator that an agent woke up until its reply lands, sometimes minutes later. Two ways to fix it: post "waking @x" system lines on the bus, or expose the driver's in-memory state. Bus lines would land in every agent's next prompt (system messages are part of the delta) and clutter the log for good. So `GET /status` exposes running/idle/queued per agent and the UI polls it every 2 s; state transitions are shown as ephemeral lines in the message list, client-side only. `!status` reads the same source and shows elapsed time and the trigger id.
+
+## 2026-09-03 Spawn conveniences
+
+`!spawn` accepts `--home` (per-agent `CLAUDE_CONFIG_DIR` / `CODEX_HOME`), `--session` (attach an existing Claude session or Codex thread), a nick-derived provider, and `~` in paths. All came from the first hands-on session: the operator typed what a shell would accept. Usage strings are wrapped in backticks because the UI renders markdown and DOMPurify strips bare `<nick>` as an HTML tag.
+
+## 2026-09-03 Review by codex-review over the bus: in-flight turns and bounded reads
+
+First review done by a peer agent through airc itself. Accepted and fixed:
+- Delta and reset prompts used the oldest N rows; past `ContextLimit` the trigger fell off the end while the cursor moved past it. `store.Latest` keeps the newest N. Rescan pages through the channel instead of stopping at 1000 rows.
+- A crash after the turn claim lost the wake for good (rollback only ran on graceful shutdown). The agent row now keeps `inflight_prev`, the cursor before the running turn; startup rolls back every row still in flight and parks the agent until `!release` (the provider may have finished the work before the crash). Rollback is conditional on the in-flight flag, so a stale rollback after a reset `!spawn` cannot move the cursor, and finishing a turn only writes the session id if the operator did not attach another one meanwhile.
+- A full per-agent queue parked nothing; the overflow is parked like a guard pause and `!release` replays it.
+- The README overstated the restart guarantee; reworded once it became true.
+
+Rejected: "live status must go through the bus". Status is ephemeral by design, see the entry above; AGENTS.md now says so explicitly.
+
+## 2026-09-03 Claude rw agents run in `auto` permission mode
+
+`acceptEdits` covered edits but every Bash call outside the `--tools` list was denied, and the first hands-on session produced a denial per turn (heredoc python, ad-hoc shell). The operator asked for `auto` by default: Claude Code's classifier approves routine commands and still refuses dangerous ones, which is what an unattended agent needs. `bypassPermissions` stays excluded. Override with `AIRC_CLAUDE_MODE=acceptEdits` for a stricter agent; `ro` agents keep `default` (no edits, no prompt).
+
+## 2026-09-03 Codex rw agents use the automatic approval reviewer
+
+Same request as for Claude. `codex exec --approve-for-me` routes approval requests through Codex's own reviewer instead of failing them; the flag is absent on `exec resume`, so the driver sets what it configures: `approval_policy="on-request"`, `approvals_reviewer="auto_review"` (keys read from the binary, accepted under `--strict-config`), plus `sandbox_workspace_write.network_access=true` so `say` (curl to localhost) works. `ro` agents keep `never` and no network. `AIRC_CODEX_STRICT=1` restores the old behaviour.
+
+## 2026-09-03 Turn claim, finish and crash recovery (second Codex review pass)
+
+Three windows in the recovery state machine, all accepted:
+- The claim was an unconditional `UPDATE ... WHERE nick`. A `!stop` or a respawn to another channel between the agent read and the claim let a stale trigger advance the new configuration's cursor. `ClaimTurn` is now one conditional update (enabled, same channel, idle, cursor behind the trigger) and a failed claim drops the trigger. Store-level test for each refusal, driver-level test for the respawn-while-queued case.
+- Finishing the turn and storing the reply were two writes. A crash in between consumed the wake without a reply; the reverse order would rerun a posted turn. `FinishTurn` now does both in one transaction and the bus only broadcasts afterwards.
+- Automatic replay of an in-flight turn after a crash could rerun a turn whose provider had already completed (edits, commits). Recovery now rolls the cursor back and parks the wake with a `[waiting for human]` notice; `!release` reruns it. Restart robustness is kept, the decision to rerun is the operator's.
+
+## 2026-09-03 Auto-restart on update
+
+Every rebuild during the first hands-on session needed a manual restart, timed to not kill a running turn. With `AIRC_AUTO_RESTART=1` the process stats its own executable every 2 s; a change that stays stable for one more tick (build finished) and an idle driver (no running turn, empty queues) end the servers cleanly and `syscall.Exec` the new binary in place: same pid, environment and arguments, so the token and database follow. Every response carries an `X-Airc-Boot` id; the UI reloads when it changes. Wakes parked in memory are lost by the restart, but their cursors were never advanced, so the startup rescan re-delivers them.
+
+## 2026-09-03 Second review round over the bus: claim generation and a persisted recovery block
+
+- A respawn on the same channel (new provider, cwd, sandbox, tools) or a `--session` attach between the agent read and the turn claim ran the turn with the configuration read before. The agent row carries `gen`, bumped by every operator mutation; `ClaimTurn` requires the generation it read. `FinishTurn` still stores the reply of a turn that ran during a reset: the work happened and hiding its output would be worse than showing it.
+- The crash-recovery block was an in-memory flag consumed by the first replayed wake; a second persisted wake, or a live one, ran the agent past the parked trigger with the ambiguous work inside its delta. The block is now a persisted setting checked by `turn()` on every wake; `!release` clears it, a reset `!spawn` clears it, a second crash keeps it. Test: two pre-crash addresses plus one live address, all parked, three turns after release.
+- README and the previous entry promised an automatic replay after a crash; reworded to the parked behaviour.
+
+## 2026-09-03 Third round over the bus: stale finishes, atomic recovery, fail-closed block
+
+- My `FinishTurn` rejection did not hold. On a first turn the old session is empty; a reset respawn during the turn leaves the row's session empty too, so a CASE on the old value matched and wrote the previous provider's session into the replacement row. `FinishTurn` is now conditional on the claim generation and the in-flight flag. A stale turn is rolled back and its reply is stored as a system audit line addressing nobody: the work stays visible, nothing is written to the replacement configuration, no peer is woken. Store test covers the empty-session reset; the driver test for a respawn to another channel now expects the audit line.
+- `RecoverInflight` wrote the rollback and the block as two statements; a crash between them left an ordinary pending wake that the next start would rerun. One transaction per agent now. Atomicity is by construction, not by a failure-injection test: the store has no hook to fail between two statements and adding one for the test alone was not worth it.
+- `turn()` ignored an error reading the recovery block and ran. It parks the wake instead, with a `[blocked]` notice naming the error. No test: the store cannot be made to fail on demand.
+
+## 2026-09-03 Fourth round: a stale success consumes its trigger
+
+Rolling back a stale but successful turn put the completed request back into the next delta; with an `rw` agent that duplicates edits or commits. A stale finish now only clears the in-flight marker (or leaves a reset row untouched) and keeps the audit line. Store test checks the next delta holds only the audit line; driver test bumps the generation mid-turn (same channel, new sandbox) and checks the next prompt excludes the completed request and uses the new sandbox.
+
+## 2026-09-03 Channel topology and self-declared activity in the prompt preamble
+
+Each turn's protocol now opens with who is in the channel: every peer with provider, sandbox, live state, turn count, the first line of its last message, and the humans seen. Agents declare their own activity with a `[status: ...]` line in any message (final reply or mid-turn `say`), parsed by the driver into the agent row; a convention rather than an endpoint so read-only Codex agents without network can declare too. Shown as `doing: "..."` in the topology and next to the nick in the UI. Advisory: an agent may ignore it; state and last message are the floor.
+
+## 2026-09-03 Two writers on one tree
+
+While the operator tested, the `claude-airc` agent (a resumed copy of the main Claude session, `rw` on this repo) ran its own review/fix loop with `codex-review` and landed a transactional turn claim (`ClaimTurn`/`FinishTurn`, `inflight_prev`, `gen`) in the same uncommitted tree the main session was editing. Nothing was lost, but only because the edits touched different lines. Rule from now on: one writer per worktree; a driven agent gets its own worktree, never the checkout a human session is editing.
+
+## 2026-09-03 A syntax gate for the UI file
+
+A `let boot` added for the reload-on-restart feature collided with the existing `boot()` function; the whole inline script died and the page went blank, and my check had only exercised the header with curl. `make test` now parses every inline `<script>` with node (`make ui-check`), fails the build on a syntax error, and the gate was proven red on the duplicate declaration before being kept.
+
+## 2026-09-03 A channel is a task
+
+`!cwd <path>` and `!topic <title>` are per-channel settings. `!spawn <nick>` then needs only the nick: provider from the nick prefix, channel from where the command is typed, cwd from the channel. The remaining positional arguments are recognised by shape (a known provider, a path, else a channel name), so nothing has to be remembered in order. The sidebar shows, per channel, its title (explicit topic, else the first non-command message), the last speaker with the start of the message, and a blinking marker when an agent is running there. Width is draggable and remembered per browser.
+
+## 2026-09-03 Cross-channel addressing, IRC style
+
+`@channel:nick` from any channel relays the message into that channel, addressed to the bare nick, with a "(relayed from X)" header and a note back in the source. The agent is woken where it lives, so its delta contains the message and its reply lands next to its context; the earlier rule (an agent is woken only from its own channel) is kept, the relay is what crosses. Agents may use it too, through `say`, for cross-task delegation. Prompt preambles now list agents of other channels in that form, plus the workspace and the lobby.
+
+## 2026-09-03 UI layout
+
+Operator's control room, not a consumer chat: a graphite palette (no tinted black), one type family, a sidebar with brand, channels (title, last speaker and snippet, running marker) and identity at the bottom; a channel header with agent chips whose dot blinks while a turn runs and shows the declared activity; a timeline with a colour rail per role (human, claude, codex, driver) and consecutive messages grouped, broken by an address, a tag, a command or a 5 min gap. Enter sends, Shift+Enter breaks a line.
+
+## 2026-09-03 No JS framework
+
+Asked after a hover-card bug (the card anchored at 0,0). The cause was a detached DOM node after a re-render, a bug I would have written in any framework's escape hatch too. One hand-written file, no build step, no dependency churn, and a syntax gate in `make test` is the right size for this tool. If the UI ever grows real state (several views, forms, undo), the step is a small runtime library without a bundler, not React and a toolchain.
+
+## 2026-09-03 Re-spawn merges, rw by default
+
+`!spawn` on an existing nick used to rebuild the whole configuration from the flags given, so `!spawn x --sandbox ro` silently dropped the tools and model. Now only what is given changes; `--tools none` clears the list. New agents default to `rw` (Claude `auto`, Codex automatic review) because that is what every hands-on spawn asked for; reviewers get `--sandbox ro`. A running turn keeps the settings it started with; the next one picks up the change.

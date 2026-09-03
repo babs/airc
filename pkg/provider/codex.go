@@ -14,6 +14,9 @@ import (
 type Codex struct {
 	// Bin is the executable; default "codex".
 	Bin string
+	// Strict makes rw agents run with approval_policy=never instead of Codex's automatic
+	// approval review (the `--approve-for-me` equivalent) and no network.
+	Strict bool
 }
 
 // Name implements Provider.
@@ -30,11 +33,21 @@ func (c Codex) Run(ctx context.Context, t Turn) (Result, error) {
 		bin = "codex"
 	}
 	sandbox := "read-only"
+	// exec is non-interactive: approvals must never block. Either refuse them (never) or route
+	// them through Codex's automatic reviewer, which is what `--approve-for-me` configures; that
+	// flag does not exist on `resume`, so the config keys are used on every turn.
+	common := []string{"--json", "--skip-git-repo-check", "-c", `approval_policy="never"`}
 	if t.Sandbox == "rw" {
 		sandbox = "workspace-write"
+		if !c.Strict {
+			common = []string{"--json", "--skip-git-repo-check", "-c", `approval_policy="on-request"`,
+				"-c", `approvals_reviewer="auto_review"`, "-c", "sandbox_workspace_write.network_access=true"}
+		}
 	}
-	// exec is non-interactive: approval_policy=never or the turn fails on the first approval.
-	common := []string{"--json", "--skip-git-repo-check", "-c", `approval_policy="never"`}
+	if t.Model != "" {
+		// -m is not accepted by `resume`; the config key works on both.
+		common = append(common, "-c", fmt.Sprintf("model=%q", t.Model))
+	}
 	var args []string
 	if t.SessionID == "" {
 		args = append([]string{"exec", "-C", t.Cwd, "-s", sandbox}, common...)

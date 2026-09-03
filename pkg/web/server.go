@@ -17,9 +17,13 @@ import (
 	"go.uber.org/zap"
 
 	"airc/pkg/bus"
+	"airc/pkg/driver"
 	"airc/pkg/proto"
 	"airc/pkg/store"
 )
+
+// StatusFunc reports live agent state; nil means no driver is attached.
+type StatusFunc func(context.Context) ([]driver.AgentStatus, error)
 
 //go:embed ui/index.html
 var ui embed.FS
@@ -29,11 +33,14 @@ type Server struct {
 	bus        *bus.Bus
 	adminToken string
 	log        *zap.Logger
+	status     StatusFunc
+	boot       string
 }
 
-// New builds a server; adminToken authorises humans and commands.
-func New(b *bus.Bus, adminToken string, log *zap.Logger) *Server {
-	return &Server{bus: b, adminToken: adminToken, log: log}
+// New builds a server; adminToken authorises humans and commands. boot identifies this process
+// lifetime: the UI reloads itself when it changes.
+func New(b *bus.Bus, adminToken string, log *zap.Logger, status StatusFunc, boot string) *Server {
+	return &Server{bus: b, adminToken: adminToken, log: log, status: status, boot: boot}
 }
 
 // Handler returns the routed handler.
@@ -51,7 +58,11 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /events", s.auth(s.events))
 	mux.Handle("GET /agents", s.auth(s.getAgents))
 	mux.Handle("GET /channels", s.auth(s.getChannels))
-	return mux
+	mux.Handle("GET /status", s.auth(s.getStatus))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Airc-Boot", s.boot)
+		mux.ServeHTTP(w, r)
+	})
 }
 
 // principal is who holds the token: the admin, or one agent.
@@ -127,14 +138,14 @@ func (s *Server) postMsg(w http.ResponseWriter, r *http.Request, p principal) {
 	if req.To == "" {
 		req.To = proto.Address(req.Body)
 	}
-	if req.To != "" && !proto.ValidNick(req.To) {
+	if req.To != "" && !proto.ValidAddress(req.To) {
 		httpError(w, http.StatusBadRequest, "invalid to")
 		return
 	}
-	if p.agent != nil && req.To != "" {
-		// An agent may only wake peers of its own channel.
-		if peer, err := s.bus.Store.Agent(r.Context(), req.To); err == nil && peer.Channel != p.agent.Channel {
-			httpError(w, http.StatusForbidden, "addressee is in another channel")
+	if toChan, toNick := proto.SplitAddress(req.To); p.agent != nil && req.To != "" && toChan == "" {
+		// A bare nick must be a peer of the agent's own channel; "channel:nick" is relayed by the driver.
+		if peer, err := s.bus.Store.Agent(r.Context(), toNick); err == nil && peer.Channel != p.agent.Channel {
+			httpError(w, http.StatusForbidden, "addressee is in another channel; use @"+peer.Channel+":"+toNick)
 			return
 		}
 	}
@@ -268,6 +279,23 @@ func (s *Server) getChannels(w http.ResponseWriter, r *http.Request, p principal
 	writeJSON(w, http.StatusOK, out)
 }
 
+func (s *Server) getStatus(w http.ResponseWriter, r *http.Request, p principal) {
+	out := []driver.AgentStatus{}
+	if s.status != nil {
+		st, err := s.status(r.Context())
+		if err != nil {
+			httpError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		for _, a := range st {
+			if p.agent == nil || a.Channel == p.agent.Channel {
+				out = append(out, a)
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
 func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
@@ -293,10 +321,11 @@ func Serve(ctx context.Context, srv *http.Server, log *zap.Logger) error {
 		return err
 	case <-ctx.Done():
 	}
-	sctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// SSE streams never finish on their own and browsers reconnect by themselves, so the drain
+	// is short: it only has to let in-flight POSTs complete.
+	sctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(sctx); err != nil {
-		// SSE streams never finish on their own; force-close past the drain deadline.
 		return srv.Close()
 	}
 	return nil
