@@ -50,6 +50,14 @@ func (d *Driver) exec(ctx context.Context, channel string, c *proto.Command) (st
 		if err := d.bus.Store.RenameChannel(ctx, channel, c.Args[0]); err != nil {
 			return "", err
 		}
+		// Parked wakes are keyed by channel in memory: follow the rename or !release loses them.
+		d.mu.Lock()
+		for i := range d.paused[channel] {
+			d.paused[channel][i].Channel = c.Args[0]
+		}
+		d.paused[c.Args[0]] = append(d.paused[c.Args[0]], d.paused[channel]...)
+		delete(d.paused, channel)
+		d.mu.Unlock()
 		// The reply goes to the new name: the old one no longer exists.
 		d.system(ctx, c.Args[0], fmt.Sprintf("channel %s renamed to %s.", channel, c.Args[0]))
 		return "", errNoReply
@@ -62,6 +70,7 @@ func (d *Driver) exec(ctx context.Context, channel string, c *proto.Command) (st
 		for _, a := range agents {
 			if a.Channel == channel && a.Enabled {
 				_ = d.bus.Store.SetEnabled(ctx, a.Nick, false)
+				d.cancelRunning(a.Nick) // like !stop: no point finishing a turn whose reply is discarded
 				n++
 			}
 		}
@@ -189,6 +198,10 @@ func (d *Driver) spawn(ctx context.Context, current string, c *proto.Command) (s
 	}
 	prev := *ag
 	var cwd string
+	// --channel is the unambiguous form: a channel named like a provider cannot be given positionally.
+	if ch, ok := c.Flags["channel"]; ok {
+		ag.Channel = ch
+	}
 	for _, a := range c.Args[1:] {
 		switch {
 		case strings.ContainsAny(a, "/") || strings.HasPrefix(a, "~") || strings.HasPrefix(a, "."):
@@ -309,12 +322,7 @@ func (d *Driver) setEnabled(ctx context.Context, c *proto.Command, enabled bool)
 	if err := d.bus.Store.SetEnabled(ctx, ag.Nick, enabled); err != nil {
 		return "", err
 	}
-	d.mu.Lock()
-	r, running := d.running[ag.Nick]
-	d.mu.Unlock()
-	if running {
-		r.cancel()
-	}
+	d.cancelRunning(ag.Nick)
 	return fmt.Sprintf("@%s stopped (session kept; `!spawn` again to re-enable).", ag.Nick), nil
 }
 

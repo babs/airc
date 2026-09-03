@@ -155,9 +155,9 @@ func run() error {
 	}
 	d := driver.New(b, providers, driver.Config{
 		BaseURL:         getEnv("AIRC_URL", "http://"+addr),
-		BotCap:          envInt("AIRC_BOT_CAP", 4),
-		MaxTurnsAgent:   envInt("AIRC_MAX_TURNS_AGENT", 50),
-		MaxTurnsChannel: envInt("AIRC_MAX_TURNS_CHANNEL", 200),
+		BotCap:          envInt("AIRC_BOT_CAP", 50),
+		MaxTurnsAgent:   envInt("AIRC_MAX_TURNS_AGENT", 200),
+		MaxTurnsChannel: envInt("AIRC_MAX_TURNS_CHANNEL", 1000),
 		TurnTimeout:     envDuration("AIRC_TURN_TIMEOUT", 15*time.Minute),
 		ContextLimit:    envInt("AIRC_CONTEXT_LIMIT", 200),
 		NtfyURL:         os.Getenv("AIRC_NTFY_URL"),

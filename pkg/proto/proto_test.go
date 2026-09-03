@@ -5,6 +5,24 @@ import (
 	"testing"
 )
 
+func TestAddresses(t *testing.T) {
+	cases := []struct {
+		in   string
+		want []string
+	}{
+		{"@claude-impl do A\n@codex-review do B", []string{"claude-impl", "codex-review"}},
+		{"@claude-impl @codex-review, @task-2:x: both of you", []string{"claude-impl", "codex-review", "task-2:x"}},
+		{"summary\n\n@codex-review please review [ask]\n@codex-review again", []string{"codex-review"}},
+		{"mail me@x.org\nno address", nil},
+		{"@a @a @b", []string{"a", "b"}},
+	}
+	for _, c := range cases {
+		if got := Addresses(c.in); !reflect.DeepEqual(got, c.want) {
+			t.Errorf("Addresses(%q) = %v, want %v", c.in, got, c.want)
+		}
+	}
+}
+
 func TestAddress(t *testing.T) {
 	cases := map[string]string{
 		"@codex-review diff ready [ask]": "codex-review",

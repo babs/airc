@@ -21,8 +21,17 @@ build:
 run: build
 	./bin/$(APP_NAME)
 
-test: ui-check
+test: ui-check lint
 	go test -race ./...
+
+cover:
+	go test -race -coverprofile=coverage.txt ./... && go tool cover -func=coverage.txt | tail -1
+
+lint:
+	golangci-lint run
+
+clean:
+	rm -rf bin/ coverage.txt
 
 # The UI is one hand-written file with no build step: a syntax error kills the whole page
 # silently. Parse every inline script with node when it is available.

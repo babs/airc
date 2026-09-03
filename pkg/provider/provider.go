@@ -98,7 +98,7 @@ func cleanEnv(env []string) []string {
 	out := env[:0:0]
 	for _, kv := range env {
 		k, _, _ := strings.Cut(kv, "=")
-		if k == "CLAUDECODE" || k == "CLAUDE_CODE_ENTRYPOINT" || strings.HasPrefix(k, "AIRC_") {
+		if strings.HasPrefix(k, "CLAUDECODE") || strings.HasPrefix(k, "CLAUDE_CODE_") || strings.HasPrefix(k, "AIRC_") {
 			continue
 		}
 		out = append(out, kv)

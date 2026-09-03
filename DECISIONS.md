@@ -76,7 +76,7 @@ Also seen: Claude's global `CLAUDE.md` applies inside a driven session (it tried
 
 ## 2026-09-03 Independent review: what changed and what was waived
 
-Fixed: cross-channel wakes (an `@nick` from another channel ran a turn on an empty delta), system notices replayed as wakes after a restart (they address the agent), failed or interrupted turns consuming the wake for good (now rolled back and parked; `!release` or a restart replays them), agent tokens listing every channel and agent, `--tools=--flag` reaching Claude's argv, non-atomic grant decrement, `!unlock` not resuming, stopped agents keeping a valid token, SSE heartbeat not catching up, 1 MiB message bodies, SRI on the two CDN scripts, and a timeout test that never timed out.
+Fixed: cross-channel wakes (an `@nick` from another channel ran a turn on an empty delta), system notices replayed as wakes after a restart (they address the agent), failed or interrupted turns consuming the wake for good (now rolled back and parked; `!release` or a restart replays them), agent tokens listing every channel and agent, `--tools=--flag` reaching Claude's argv, non-atomic grant decrement, `!unlock` not resuming, stopped agents keeping a valid token, SSE heartbeat not catching up, 256 KiB message body cap, SRI on the two CDN scripts, and a timeout test that never timed out.
 
 Waived: the agent inherits the operator's environment (minus `AIRC_*` and `CLAUDECODE*`). An allowlist would break the CLIs in ways I cannot enumerate (auth, proxies, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, certificates). An interactive Claude Code session has the same environment; the POC does not claim to sandbox better than the CLIs themselves do.
 
@@ -164,3 +164,11 @@ Asked after a hover-card bug (the card anchored at 0,0). The cause was a detache
 ## 2026-09-03 Re-spawn merges, rw by default
 
 `!spawn` on an existing nick used to rebuild the whole configuration from the flags given, so `!spawn x --sandbox ro` silently dropped the tools and model. Now only what is given changes; `--tools none` clears the list. New agents default to `rw` (Claude `auto`, Codex automatic review) because that is what every hands-on spawn asked for; reviewers get `--sandbox ro`. A running turn keeps the settings it started with; the next one picks up the change.
+
+## 2026-09-03 Review before commit: rename during a turn
+
+A `!rename` while a turn ran left the reply in the old channel name, resurrecting it, and lost the wakes parked under that name. Now a rename bumps the agents' `gen`, so the in-flight turn finishes stale and its reply is filed as an audit line in the channel the agent lives in now (`FinishTurn` reads the current channel); parked wakes are re-keyed to the new name; a replayed trigger whose message moved with the rename still claims, one left behind by a respawn still drops. Also from that review: `!close` cancels running turns like `!stop`, `!spawn --channel` for channels named like a provider, `GET /msgs` capped at 1000 rows, `CLAUDECODE*`/`CLAUDE_CODE_*` scrubbed by prefix, and the Makefile `lint`/`cover`/`clean` targets restored (a patch had truncated them; `make test` now depends on `lint`).
+
+## 2026-09-03 Cap raised to 50, agents may read the log on demand
+
+The cap of 4 consecutive agent messages paused every real exchange after two rounds. Default is now 50 (`AIRC_BOT_CAP`), with the budgets raised to 200 turns per agent and 1000 per channel so the cap stays the guard that actually fires. Agents are also told they can fetch their channel's history with their own token (`GET /msgs`, channel-scoped by the token) when the delta in the prompt is not enough.

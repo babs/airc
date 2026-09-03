@@ -8,7 +8,7 @@
 
 ## Conventions
 
-- Bus messages are the only integration point: the driver is a bus subscriber, the web layer a bus writer. Add features on the bus, not with new direct calls.
+- Bus messages are the integration point for anything that must persist or reach agents: the driver is a bus subscriber, the web layer a bus writer. Ephemeral state (who is running now) is the one exception: `GET /status` reads the driver's memory so that no status line ever lands in an agent prompt.
 - Agent identity is server-side: an agent token pins `from` and `channel`. Never let request bodies override it.
 - CLI flag shapes for Claude and Codex were verified by running them; see `DECISIONS.md` before changing `pkg/provider`.
 - Every non-obvious choice goes in `DECISIONS.md` with the why. Not in code comments.

@@ -242,3 +242,37 @@ func TestAgentsRoundTrip(t *testing.T) {
 		t.Fatal("setting round trip")
 	}
 }
+
+func TestTopicSkipsRelayHeaderAndMessageChannel(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	relay := &Message{Channel: "t", From: "claude-x", Body: "(relayed from lobby)\n@codex-y look"}
+	_ = s.Insert(ctx, relay)
+	_ = s.Insert(ctx, &Message{Channel: "t", From: "human", Body: "real topic"})
+	chs, _ := s.Channels(ctx)
+	if len(chs) != 1 || chs[0].Topic != "real topic" {
+		t.Fatalf("topic must skip relay headers: %+v", chs)
+	}
+	if ch, err := s.MessageChannel(ctx, relay.ID); err != nil || ch != "t" {
+		t.Fatalf("message channel: %v %q", err, ch)
+	}
+	_ = s.RenameChannel(ctx, "t", "u")
+	if ch, _ := s.MessageChannel(ctx, relay.ID); ch != "u" {
+		t.Fatalf("message channel after rename: %q", ch)
+	}
+	if _, err := s.MessageChannel(ctx, 9999); err != ErrNotFound {
+		t.Fatalf("missing message: %v", err)
+	}
+}
+
+func TestRenameBumpsGen(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	_ = s.PutAgent(ctx, &Agent{Nick: "a", Provider: "claude", Channel: "t", Cwd: "/", Sandbox: "rw", Token: "k", Enabled: true})
+	before, _ := s.Agent(ctx, "a")
+	_ = s.RenameChannel(ctx, "t", "u")
+	after, _ := s.Agent(ctx, "a")
+	if after.Channel != "u" || after.Gen != before.Gen+1 {
+		t.Fatalf("rename must move the agent and bump gen: %+v -> %+v", before, after)
+	}
+}

@@ -163,6 +163,9 @@ func (s *Server) getMsgs(w http.ResponseWriter, r *http.Request, p principal) {
 	channel := s.channelFor(p, q.Get("channel"))
 	since, _ := strconv.ParseInt(q.Get("since"), 10, 64)
 	limit, _ := strconv.Atoi(q.Get("limit"))
+	if limit <= 0 || limit > 1000 {
+		limit = 1000 // one page at most; clients paginate with since=
+	}
 	msgs, err := s.bus.Store.Messages(r.Context(), channel, since, 0, limit)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())

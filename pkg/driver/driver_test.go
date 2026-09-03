@@ -337,6 +337,27 @@ func TestQueueFullParksWake(t *testing.T) {
 	e.wait(func(m store.Message) bool { return strings.Contains(m.Body, "resuming 1 paused") })
 }
 
+func TestOneMessageWakesEveryAddressee(t *testing.T) {
+	a := &fake{name: "claude"}
+	b := &fake{name: "codex"}
+	e := newEnv(t, Config{}, a, b)
+	e.spawn("claude-impl", "claude", "task-1")
+	e.spawn("codex-review", "codex", "task-1")
+	e.post("task-1", "human", "", "@claude-impl implement A\n@codex-review review B when done")
+	e.wait(from("claude-impl"))
+	e.wait(from("codex-review"))
+	if a.count() != 1 || b.count() != 1 {
+		t.Fatalf("turns claude=%d codex=%d", a.count(), b.count())
+	}
+	// Same line, comma separated, still both.
+	e.post("task-1", "human", "", "@claude-impl, @codex-review both: status?")
+	e.wait(from("claude-impl"))
+	e.wait(from("codex-review"))
+	if a.count() != 2 || b.count() != 2 {
+		t.Fatalf("turns claude=%d codex=%d", a.count(), b.count())
+	}
+}
+
 func TestCrossChannelWakeRefused(t *testing.T) {
 	f := &fake{name: "claude"}
 	e := newEnv(t, Config{}, f)
@@ -771,5 +792,85 @@ func TestShutdownRollsBackRunningTurn(t *testing.T) {
 	ag, _ := s.Agent(ctx, "claude-impl")
 	if ag.LastMsgID != 0 || ag.Turns != 0 {
 		t.Fatalf("interrupted turn must be rolled back for rescan: %+v", ag)
+	}
+}
+
+func TestRenameMidTurnLandsReplyInNewChannel(t *testing.T) {
+	f := &fake{name: "claude"}
+	started, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	f.reply = func(tn provider.Turn) (provider.Result, error) {
+		once.Do(func() { close(started) })
+		<-release
+		return provider.Result{SessionID: "s", Text: "@codex-review work done [ask]"}, nil
+	}
+	e := newEnv(t, Config{}, f)
+	e.spawn("claude-impl", "claude", "task-1")
+	e.post("task-1", "human", "", "@claude-impl go")
+	<-started
+	e.post("task-1", "human", "", "!rename task-9")
+	e.wait(func(m store.Message) bool {
+		return m.Channel == "task-9" && strings.Contains(m.Body, "renamed to task-9")
+	})
+	close(release)
+	reply := e.wait(func(m store.Message) bool { return strings.Contains(m.Body, "work done") })
+	if reply.Channel != "task-9" || reply.From != "airc" || reply.To != "" {
+		t.Fatalf("reply must land in the new channel as a stale audit line: %+v", reply)
+	}
+	if old, _ := e.b.Store.Messages(context.Background(), "task-1", 0, 0, 0); len(old) != 0 {
+		t.Fatalf("old channel resurrected with %d message(s)", len(old))
+	}
+	// The next wake, addressed in the new channel, runs normally.
+	e.post("task-9", "human", "", "@claude-impl again")
+	e.wait(func(m store.Message) bool { return m.From == "claude-impl" && m.Channel == "task-9" })
+}
+
+func TestRenameFollowsPausedWakes(t *testing.T) {
+	f := &fake{name: "claude"}
+	e := newEnv(t, Config{}, f)
+	e.spawn("claude-impl", "claude", "task-1")
+	e.post("task-1", "human", "", "!lock")
+	e.wait(func(m store.Message) bool { return strings.Contains(m.Body, "channel locked") })
+	e.post("task-1", "human", "", "@claude-impl parked")
+	e.wait(func(m store.Message) bool { return strings.Contains(m.Body, "is locked") })
+	e.post("task-1", "human", "", "!rename task-9")
+	e.wait(func(m store.Message) bool { return strings.Contains(m.Body, "renamed to task-9") })
+	e.post("task-9", "human", "", "!unlock")
+	e.wait(func(m store.Message) bool { return strings.Contains(m.Body, "unlocked, resuming 1") })
+	reply := e.wait(from("claude-impl"))
+	if reply.Channel != "task-9" || !strings.Contains(f.last().Prompt, "parked") {
+		t.Fatalf("replayed wake must run in the renamed channel: %+v", reply)
+	}
+}
+
+func TestCloseCancelsRunningTurn(t *testing.T) {
+	f := &fake{name: "claude"}
+	started := make(chan struct{})
+	f.reply = func(tn provider.Turn) (provider.Result, error) {
+		close(started)
+		<-f.ctx.Done()
+		return provider.Result{}, f.ctx.Err()
+	}
+	e := newEnv(t, Config{}, f)
+	e.spawn("claude-impl", "claude", "task-1")
+	e.post("task-1", "human", "", "@claude-impl long")
+	<-started
+	e.post("task-1", "human", "", "!close")
+	e.wait(func(m store.Message) bool { return strings.Contains(m.Body, "closed: hidden") })
+	select {
+	case <-f.ctx.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("!close must cancel the running turn")
+	}
+}
+
+func TestSpawnChannelFlag(t *testing.T) {
+	e := newEnv(t, Config{}, &fake{name: "claude"})
+	e.post("lobby", "human", "", "!cwd /tmp")
+	e.wait(func(m store.Message) bool { return strings.Contains(m.Body, "workspace of lobby set") })
+	e.post("lobby", "human", "", "!spawn claude-x --channel codex /tmp")
+	m := e.wait(from("airc"))
+	if !strings.Contains(m.Body, "(claude, rw, cwd /tmp) in codex") {
+		t.Fatalf("--channel must name a channel called like a provider: %s", m.Body)
 	}
 }

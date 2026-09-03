@@ -230,7 +230,7 @@ func (s *Store) queryMessages(ctx context.Context, q string, args ...any) ([]Mes
 func (s *Store) Channels(ctx context.Context) ([]Channel, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT m.channel, MAX(m.id),
-		  COALESCE((SELECT body FROM messages f WHERE f.channel = m.channel AND substr(f.body, 1, 1) != '!' AND f.sender != 'airc' ORDER BY id ASC LIMIT 1), ''),
+		  COALESCE((SELECT body FROM messages f WHERE f.channel = m.channel AND substr(f.body, 1, 1) != '!' AND f.sender != 'airc' AND f.body NOT LIKE '(relayed from %' ORDER BY id ASC LIMIT 1), ''),
 		  COALESCE((SELECT sender FROM messages l WHERE l.channel = m.channel ORDER BY id DESC LIMIT 1), ''),
 		  COALESCE((SELECT body FROM messages l WHERE l.channel = m.channel ORDER BY id DESC LIMIT 1), ''),
 		  COALESCE((SELECT ts FROM messages l WHERE l.channel = m.channel ORDER BY id DESC LIMIT 1), '')
@@ -277,6 +277,19 @@ func (s *Store) Channels(ctx context.Context) ([]Channel, error) {
 	return kept, nil
 }
 
+// MessageChannel returns the channel a message currently belongs to (renames move messages).
+func (s *Store) MessageChannel(ctx context.Context, id int64) (string, error) {
+	var ch string
+	err := s.db.QueryRowContext(ctx, `SELECT channel FROM messages WHERE id = ?`, id).Scan(&ch)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("message channel %d: %w", id, err)
+	}
+	return ch, nil
+}
+
 // RenameChannel moves messages, agents and per-channel settings from old to new, atomically.
 func (s *Store) RenameChannel(ctx context.Context, oldName, newName string) error {
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -284,9 +297,10 @@ func (s *Store) RenameChannel(ctx context.Context, oldName, newName string) erro
 		return fmt.Errorf("rename channel: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op after Commit
+	// gen bumps so a turn claimed under the old name finishes stale instead of writing into it.
 	stmts := []string{
 		`UPDATE messages SET channel = ? WHERE channel = ?`,
-		`UPDATE agents SET channel = ? WHERE channel = ?`,
+		`UPDATE agents SET channel = ?, gen = gen + 1 WHERE channel = ?`,
 	}
 	for _, q := range stmts {
 		if _, err := tx.ExecContext(ctx, q, newName, oldName); err != nil {
@@ -440,6 +454,10 @@ func (s *Store) FinishTurn(ctx context.Context, nick string, gen int, newSession
 		}
 		reply.Body = fmt.Sprintf("Stale reply from %s (its configuration changed during the turn; kept for the record, nobody woken):\n\n%s", nick, reply.Body)
 		reply.From, reply.To, reply.Tags = proto.SystemNick, "", nil
+	}
+	// The reply lands where the agent lives now: a rename during the turn moved the channel.
+	if err := tx.QueryRowContext(ctx, `SELECT channel FROM agents WHERE nick = ?`, nick).Scan(&reply.Channel); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return false, fmt.Errorf("finish turn %s: %w", nick, err)
 	}
 	if err := insertMessage(ctx, tx, reply); err != nil {
 		return false, err

@@ -108,7 +108,7 @@
   <span id="agents"></span>
   <span id="controls">
     <button type="button" id="lock" title="Freeze this channel: no agent is woken until unlock">lock</button>
-    <input id="releaseN" type="number" min="1" value="4" title="Turns to release">
+    <input id="releaseN" type="number" min="1" value="50" title="Turns to release">
     <button type="button" id="release" title="Allow N more agent turns past the cap and resume paused wakes">release</button>
     <button type="button" id="statusBtn" title="Post !status">status</button>
   </span>
@@ -155,7 +155,9 @@
     div.className = 'msg ' + roleOf(m.from) + (first ? ' first' : '');
     const ts = new Date(m.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const tags = (m.tags || []).map(t => `<span class="tag ${tagClass(t)}">${t}</span>`).join(' ');
-    const to = m.to ? `<span class="to">→ @${esc(m.to)}</span>` : '';
+    // Every addressee is shown, as the driver wakes them all (line-leading @nick runs).
+    const tos = [...new Set([m.to, ...m.body.split('\n').flatMap(l => { const r = /^[ \t]*((?:@[a-z0-9-]+(?::[a-z0-9-]+)?[ \t,:]*)+)/.exec(l); return r ? r[1].match(/@[a-z0-9:-]+/g).map(s => s.slice(1)) : []; })].filter(Boolean))];
+    const to = tos.length ? `<span class="to">→ ${tos.map(x => '@' + esc(x)).join(' ')}</span>` : '';
     div.innerHTML = `<span class="time" title="${esc(new Date(m.ts).toLocaleString())}">${ts}</span><div class="meta"><b data-nick="${esc(m.from)}">${esc(m.from)}</b>${to}${tags}<span class="id">#${m.id}</span></div><div class="body"></div>`;
     const body = div.querySelector('.body');
     // Agent output is untrusted and this page holds the admin token: never set innerHTML unsanitized.

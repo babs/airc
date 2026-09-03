@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -44,12 +45,12 @@ func do(t *testing.T, ts *httptest.Server, method, path, token, body string) (in
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	var sb strings.Builder
-	sc := bufio.NewScanner(resp.Body)
-	for sc.Scan() {
-		sb.WriteString(sc.Text())
+	// io.ReadAll, not a Scanner: a 1000-row JSON page exceeds the scanner's 64 KiB token limit.
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
 	}
-	return resp.StatusCode, sb.String()
+	return resp.StatusCode, strings.ReplaceAll(string(data), "\n", "")
 }
 
 func TestPostMsgAuthAndValidation(t *testing.T) {
@@ -95,6 +96,14 @@ func TestPostMsgAuthAndValidation(t *testing.T) {
 	code, body = do(t, ts, "GET", "/agents", "agent-tok", "")
 	if code != 200 || strings.Contains(body, "far-away") || !strings.Contains(body, `"nick":"claude-impl"`) {
 		t.Fatalf("agent must only see its channel: %d %s", code, body)
+	}
+	// /msgs is paged: a huge limit is clamped to one page of 1000.
+	for i := 0; i < 1005; i++ {
+		_ = b.Post(context.Background(), &store.Message{Channel: "paged", From: "h", Body: "x"})
+	}
+	code, body = do(t, ts, "GET", "/msgs?channel=paged&limit=99999999", "admin", "")
+	if code != 200 || strings.Count(body, `"channel":"paged"`) != 1000 {
+		t.Fatalf("limit clamp: %d, %d rows", code, strings.Count(body, `"channel":"paged"`))
 	}
 	code, body = do(t, ts, "GET", "/status", "agent-tok", "")
 	if code != 200 || strings.Contains(body, "far-away") || !strings.Contains(body, `"state":"running"`) {

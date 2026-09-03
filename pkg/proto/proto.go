@@ -20,24 +20,47 @@ const (
 const SystemNick = "airc"
 
 var (
-	nickRe    = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
-	addressRe = regexp.MustCompile(`(?m)^[ \t]*@([a-z0-9][a-z0-9-]{0,31}(?::[a-z0-9][a-z0-9-]{0,31})?)\b`)
-	tagRe     = regexp.MustCompile(`(?i)\[(done|ask|blocked|waiting for human)\]`)
-	statusRe  = regexp.MustCompile(`(?i)\[status:\s*([^\]\n]{1,200})\]`)
+	nickRe   = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
+	tagRe    = regexp.MustCompile(`(?i)\[(done|ask|blocked|waiting for human)\]`)
+	statusRe = regexp.MustCompile(`(?i)\[status:\s*([^\]\n]{1,200})\]`)
 )
 
 // ValidNick reports whether s is an acceptable nick or channel name.
 func ValidNick(s string) bool { return nickRe.MatchString(s) }
 
-// Address returns the nick a body addresses: the first line that starts with "@nick" or, IRC
-// style, "@channel:nick" for an agent living in another channel. Agents put a summary first and
-// the addressee at the end, so any line counts, not only the first.
-func Address(body string) string {
-	m := addressRe.FindStringSubmatch(body)
-	if m == nil {
-		return ""
+// leadRe matches one address at the start of a line remainder, plus the separators after it,
+// so "@a @b, @c: do it" yields three addressees.
+var leadRe = regexp.MustCompile(`^@([a-z0-9][a-z0-9-]{0,31}(?::[a-z0-9][a-z0-9-]{0,31})?)\b[ \t,:]*`)
+
+// Addresses returns every nick a body addresses, in order, without duplicates: on each line the
+// leading run of "@nick" or IRC style "@channel:nick" tokens. Agents put a summary first and the
+// addressees at the end, so any line counts, not only the first.
+func Addresses(body string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, line := range strings.Split(body, "\n") {
+		rest := strings.TrimLeft(line, " \t")
+		for {
+			m := leadRe.FindStringSubmatch(rest)
+			if m == nil {
+				break
+			}
+			if !seen[m[1]] {
+				seen[m[1]] = true
+				out = append(out, m[1])
+			}
+			rest = rest[len(m[0]):]
+		}
 	}
-	return m[1]
+	return out
+}
+
+// Address returns the first addressee of body, or "" (see Addresses).
+func Address(body string) string {
+	if a := Addresses(body); len(a) > 0 {
+		return a[0]
+	}
+	return ""
 }
 
 // SplitAddress separates "channel:nick" into its parts; channel is empty for a bare nick.
