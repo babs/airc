@@ -23,7 +23,11 @@ func TestWatchWaitsForStableChangeAndIdle(t *testing.T) {
 	go func() { done <- Watch(ctx, p, 20*time.Millisecond, idle.Load, func(string) { logs.Add(1) }) }()
 
 	time.Sleep(60 * time.Millisecond)
-	if err := os.WriteFile(p, []byte("v2-longer"), 0o700); err != nil {
+	// Rename, not WriteFile: a truncate-then-write can be polled in both states and logged twice.
+	if err := os.WriteFile(p+".new", []byte("v2-longer"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(p+".new", p); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(120 * time.Millisecond)
