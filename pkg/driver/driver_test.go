@@ -343,16 +343,22 @@ func TestOneMessageWakesEveryAddressee(t *testing.T) {
 	e := newEnv(t, Config{}, a, b)
 	e.spawn("claude-impl", "claude", "task-1")
 	e.spawn("codex-review", "codex", "task-1")
+	// The two agents reply in any order; wait consumes, so collect both rather than sequence them.
+	both := func() {
+		t.Helper()
+		seen := map[string]bool{}
+		for len(seen) < 2 {
+			seen[e.wait(func(m store.Message) bool { return m.From == "claude-impl" || m.From == "codex-review" }).From] = true
+		}
+	}
 	e.post("task-1", "human", "", "@claude-impl implement A\n@codex-review review B when done")
-	e.wait(from("claude-impl"))
-	e.wait(from("codex-review"))
+	both()
 	if a.count() != 1 || b.count() != 1 {
 		t.Fatalf("turns claude=%d codex=%d", a.count(), b.count())
 	}
 	// Same line, comma separated, still both.
 	e.post("task-1", "human", "", "@claude-impl, @codex-review both: status?")
-	e.wait(from("claude-impl"))
-	e.wait(from("codex-review"))
+	both()
 	if a.count() != 2 || b.count() != 2 {
 		t.Fatalf("turns claude=%d codex=%d", a.count(), b.count())
 	}
@@ -634,11 +640,9 @@ func TestCrashRecoveryParksInflightTurn(t *testing.T) {
 		}
 		return store.Message{}
 	}
-	for _, id := range []string{"#1", "#2"} {
-		m := next("no recovery notice for " + id)
-		if m.From != "airc" || !strings.Contains(m.Body, id+" parked") || f.count() != 0 {
-			t.Fatalf("expected a parked notice for %s, got %+v (turns=%d)", id, m, f.count())
-		}
+	// #1 and #2 are replayed together and coalesce: one parked notice, for the newest.
+	if m := next("no recovery notice"); m.From != "airc" || !strings.Contains(m.Body, "#2 parked") || f.count() != 0 {
+		t.Fatalf("expected a parked notice for #2, got %+v (turns=%d)", m, f.count())
 	}
 	// A live wake after the restart is parked too.
 	_ = b.Post(ctx, &store.Message{Channel: "c", From: "human", Body: "@a live work"})
@@ -652,19 +656,29 @@ func TestCrashRecoveryParksInflightTurn(t *testing.T) {
 	}
 	_ = b.Post(ctx, &store.Message{Channel: "c", From: "human", Body: "!release"})
 	next("release echo")
-	if m := next("no release notice"); !strings.Contains(m.Body, "resuming 3 paused") {
+	if m := next("no release notice"); !strings.Contains(m.Body, "resuming 2 paused") {
 		t.Fatalf("%+v", m)
 	}
-	for i := 0; i < 3; i++ {
+	// Both replays are enqueued back to back and usually coalesce into one turn; either way
+	// every wake is covered exactly once, #1 riding in the delta of #2.
+	replies := 0
+	for replies == 0 || !strings.Contains(f.last().Prompt, "live work") {
 		if m := next("no reply"); m.From != "a" {
 			t.Fatalf("%+v", m)
 		}
+		replies++
 	}
-	if !strings.Contains(f.turns[0].Prompt, "@a work") || !strings.Contains(f.turns[2].Prompt, "live work") {
-		t.Fatalf("prompts: %q / %q", f.turns[0].Prompt, f.turns[2].Prompt)
+	var all strings.Builder
+	for _, tn := range f.turns {
+		all.WriteString(tn.Prompt)
+	}
+	for _, want := range []string{"@a work", "more work", "live work"} {
+		if strings.Count(all.String(), want) != 1 {
+			t.Fatalf("%q must appear in exactly one prompt:\n%s", want, all.String())
+		}
 	}
 	ag, _ = s.Agent(ctx, "a")
-	if ag.Turns != 3 || ag.LastMsgID <= 2 {
+	if replies > 2 || ag.Turns != replies || ag.LastMsgID <= 2 {
 		t.Fatalf("after rerun: %+v", ag)
 	}
 	if r, _ := s.Recovering(ctx, "a"); r {
@@ -872,5 +886,85 @@ func TestSpawnChannelFlag(t *testing.T) {
 	m := e.wait(from("airc"))
 	if !strings.Contains(m.Body, "(claude, rw, cwd /tmp) in codex") {
 		t.Fatalf("--channel must name a channel called like a provider: %s", m.Body)
+	}
+}
+
+func TestQueuedWakesCoalesceIntoOneTurn(t *testing.T) {
+	f := &fake{name: "claude"}
+	started, release := make(chan struct{}), make(chan struct{})
+	var calls atomic.Int32
+	f.reply = func(tn provider.Turn) (provider.Result, error) {
+		if calls.Add(1) == 1 {
+			close(started)
+			<-release
+		}
+		return provider.Result{SessionID: "s", Text: "ok [done]"}, nil
+	}
+	e := newEnv(t, Config{}, f)
+	e.spawn("claude-impl", "claude", "task-1")
+	e.post("task-1", "human", "", "@claude-impl first")
+	<-started
+	e.post("task-1", "human", "", "@claude-impl second")
+	e.post("task-1", "human", "", "aside, nobody woken")
+	e.post("task-1", "human", "", "@claude-impl third")
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		st, _ := e.d.Status(context.Background())
+		if st[0].Queued == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("queue never filled: %+v", st)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	close(release)
+	e.wait(from("claude-impl"))
+	e.wait(from("claude-impl"))
+	time.Sleep(50 * time.Millisecond)
+	if n := f.count(); n != 2 {
+		t.Fatalf("expected 2 turns for 3 wakes, got %d", n)
+	}
+	p := f.last().Prompt
+	for _, want := range []string{"second", "aside", "third"} {
+		if !strings.Contains(p, want) {
+			t.Fatalf("coalesced prompt lacks %q:\n%s", want, p)
+		}
+	}
+	if strings.Contains(p, "first") {
+		t.Fatalf("coalesced prompt must start after the previous trigger:\n%s", p)
+	}
+}
+
+func TestRefusedClaimRetriesOnceWithFreshRead(t *testing.T) {
+	f := &fake{name: "claude"}
+	e := newEnv(t, Config{}, f)
+	e.spawn("claude-impl", "claude", "task-1")
+	// A session attach lands between the agent read and the claim: the first claim is refused,
+	// the retry reads the new generation and runs.
+	var bumps atomic.Int32
+	e.d.testBeforeClaim = func() {
+		if bumps.Add(1) == 1 {
+			_ = e.b.Store.SetSession(context.Background(), "claude-impl", "attached")
+		}
+	}
+	e.post("task-1", "human", "", "@claude-impl work")
+	e.wait(from("claude-impl"))
+	if f.count() != 1 || bumps.Load() != 2 || !strings.Contains(f.last().Prompt, "work") || f.last().SessionID != "attached" {
+		t.Fatalf("turns=%d claims=%d session=%q", f.count(), bumps.Load(), f.last().SessionID)
+	}
+	// The agent keeps moving under every read: two attempts, then the trigger is dropped.
+	bumps.Store(0)
+	e.d.testBeforeClaim = func() {
+		bumps.Add(1)
+		_ = e.b.Store.SetSession(context.Background(), "claude-impl", "again")
+	}
+	e.post("task-1", "human", "", "@claude-impl more")
+	for bumps.Load() < 2 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if f.count() != 1 || bumps.Load() != 2 {
+		t.Fatalf("turns=%d claims=%d", f.count(), bumps.Load())
 	}
 }

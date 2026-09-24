@@ -172,3 +172,7 @@ A `!rename` while a turn ran left the reply in the old channel name, resurrectin
 ## 2026-09-03 Cap raised to 50, agents may read the log on demand
 
 The cap of 4 consecutive agent messages paused every real exchange after two rounds. Default is now 50 (`AIRC_BOT_CAP`), with the budgets raised to 200 turns per agent and 1000 per channel so the cap stays the guard that actually fires. Agents are also told they can fetch their channel's history with their own token (`GET /msgs`, channel-scoped by the token) when the delta in the prompt is not enough.
+
+## 2026-09-24 Queued wakes coalesce into one turn
+
+One turn per addressed message meant three `@bot` lines posted while the bot was busy ran three turns, the second and third often undoing the first. A turn's delta already spans everything between the cursor and its trigger, so the worker now drains its queue and runs the newest wake: one turn, one prompt with every pending message, one reply (and one tag) for all of them. Guards, rollback and `!release` are untouched: they park and replay a trigger, and the newest one covers the older ones the same way. Startup replays and `!release` replays coalesce too, so a recovery reruns one turn instead of one per parked wake. Since a refused claim now drops a whole backlog instead of one trigger, the worker retries once with a fresh agent read (a `!spawn` flag or a session attach in the read-to-claim window); a second refusal is a real move and drops it. The multi-addressee test was fixed on the way: it sequenced two replies whose order is not defined.

@@ -58,6 +58,8 @@ type Driver struct {
 	running map[string]*run
 	// paused holds wakes dropped by a guard, per channel, so !release can replay them.
 	paused map[string][]store.Message
+	// testBeforeClaim runs between the agent read and ClaimTurn; tests widen that window.
+	testBeforeClaim func()
 }
 
 // run is one in-flight turn.
@@ -339,16 +341,40 @@ func (d *Driver) worker(ctx context.Context, nick string, q chan store.Message) 
 		case <-ctx.Done():
 			return
 		case m := <-q:
-			d.turn(ctx, nick, m)
+			// Coalesce: a turn's delta spans (cursor, trigger], so the newest queued wake covers
+			// every older one in one turn.
+			dropped := 0
+			for drained := false; !drained; {
+				select {
+				case n := <-q:
+					if n.ID > m.ID {
+						m = n
+					}
+					dropped++
+				default:
+					drained = true
+				}
+			}
+			if dropped > 0 {
+				d.log.Info("wakes_coalesced", zap.String("nick", nick), zap.Int("dropped", dropped), zap.Int64("trigger", m.ID))
+			}
+			// A refused claim means the agent changed under the read (a !spawn flag, a session
+			// attach): read it again once, or the whole coalesced backlog is lost. A second
+			// refusal is a real move (!stop, respawn away) and drops it.
+			if d.turn(ctx, nick, m) {
+				d.turn(ctx, nick, m)
+			}
 		}
 	}
 }
 
-func (d *Driver) turn(ctx context.Context, nick string, trigger store.Message) {
+// turn runs one turn for trigger. It reports true only when the claim was refused, so the caller
+// may retry with a fresh read.
+func (d *Driver) turn(ctx context.Context, nick string, trigger store.Message) bool {
 	st := d.bus.Store
 	ag, err := st.Agent(ctx, nick)
 	if err != nil || !ag.Enabled || ag.LastMsgID >= trigger.ID {
-		return
+		return false
 	}
 	// Every wake, replayed or live, is parked while the agent's last turn is unaccounted for:
 	// the provider may have done the work before the crash. Only !release lifts the block.
@@ -365,24 +391,24 @@ func (d *Driver) turn(ctx context.Context, nick string, trigger store.Message) {
 		}
 		d.system(ctx, ag.Channel, msg)
 		d.notify(ag.Channel, msg)
-		return
+		return false
 	}
 	if reason := d.guard(ctx, ag, trigger); reason != "" {
 		// The cursor stays put: !release replays this wake and the delta is still complete.
 		d.pause(ag.Channel, trigger)
 		d.system(ctx, ag.Channel, reason)
 		d.notify(ag.Channel, reason)
-		return
+		return false
 	}
 	prov, ok := provider.Lookup(d.providers, ag.Provider)
 	if !ok {
 		d.system(ctx, ag.Channel, fmt.Sprintf("[blocked] @%s: unknown provider %q", nick, ag.Provider))
-		return
+		return false
 	}
 	delta, err := st.Latest(ctx, ag.Channel, ag.LastMsgID, trigger.ID+1, d.cfg.ContextLimit)
 	if err != nil {
 		d.log.Error("delta_failed", zap.Error(err))
-		return
+		return false
 	}
 	// Claim the turn before running so a duplicate wake cannot run it twice. The claim is
 	// conditional on what was read above (enabled, channel, generation, cursor, idle): a !stop,
@@ -395,14 +421,17 @@ func (d *Driver) turn(ctx context.Context, nick string, trigger store.Message) {
 			trigger.Channel = cur
 		}
 	}
+	if d.testBeforeClaim != nil {
+		d.testBeforeClaim()
+	}
 	claimed, err := st.ClaimTurn(ctx, nick, trigger.Channel, ag.Gen, trigger.ID)
 	if err != nil {
 		d.log.Error("agent_update_failed", zap.Error(err))
-		return
+		return false
 	}
 	if !claimed {
 		d.log.Info("turn_not_claimed", zap.String("nick", nick), zap.Int64("trigger", trigger.ID))
-		return
+		return true
 	}
 	ag.LastMsgID = trigger.ID
 
@@ -445,7 +474,7 @@ func (d *Driver) turn(ctx context.Context, nick string, trigger store.Message) {
 			d.log.Error("rollback_failed", zap.Error(rerr))
 		}
 		if ctx.Err() != nil {
-			return
+			return false
 		}
 		ch := d.channelOf(ctx, nick, ag.Channel)
 		trigger.Channel = ch
@@ -453,7 +482,7 @@ func (d *Driver) turn(ctx context.Context, nick string, trigger store.Message) {
 		msg := fmt.Sprintf("[blocked] @%s turn failed: %v. `!release` retries it.", nick, err)
 		d.system(ctx, ch, msg)
 		d.notify(ch, msg)
-		return
+		return false
 	}
 	turnsTotal.WithLabelValues(ag.Provider, "ok").Inc()
 	d.log.Info("turn_done", zap.String("nick", nick), zap.Duration("elapsed", elapsed), zap.String("usage", res.Usage), zap.Float64("cost_usd", res.CostUSD))
@@ -468,12 +497,12 @@ func (d *Driver) turn(ctx context.Context, nick string, trigger store.Message) {
 	stale, err := st.FinishTurn(ctx, nick, ag.Gen, res.SessionID, out)
 	if err != nil {
 		d.log.Error("finish_turn_failed", zap.Error(err))
-		return
+		return false
 	}
 	d.bus.Broadcast(*out)
 	if stale {
 		d.log.Warn("turn_stale", zap.String("nick", nick), zap.Int("gen", ag.Gen))
-		return
+		return false // the provider ran: nothing to retry
 	}
 	if len(res.Denials) > 0 {
 		d.system(ctx, out.Channel, fmt.Sprintf("@%s had %d tool call(s) denied: %s", nick, len(res.Denials), strings.Join(res.Denials, "; ")))
@@ -483,6 +512,7 @@ func (d *Driver) turn(ctx context.Context, nick string, trigger store.Message) {
 	if needsHuman {
 		d.notify(ag.Channel, fmt.Sprintf("%s: %s", nick, firstLine(body)))
 	}
+	return false
 }
 
 // guard returns a human-readable reason to skip the turn, or "".
@@ -728,7 +758,7 @@ func formatPrompt(ag *store.Agent, msgs []store.Message, full bool) string {
 		}
 		fmt.Fprintf(&b, "[%s] %s%s:\n%s\n\n", m.TS.Format("15:04"), m.From, to, strings.TrimSpace(m.Body))
 	}
-	b.WriteString("Act on the message addressed to you, then end your turn per the rules.")
+	b.WriteString("Act on the messages addressed to you, then end your turn per the rules.")
 	return b.String()
 }
 
