@@ -19,10 +19,10 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"go.uber.org/zap"
 
-	"airc/pkg/bus"
-	"airc/pkg/proto"
-	"airc/pkg/provider"
-	"airc/pkg/store"
+	"github.com/babs/airc/pkg/bus"
+	"github.com/babs/airc/pkg/proto"
+	"github.com/babs/airc/pkg/provider"
+	"github.com/babs/airc/pkg/store"
 )
 
 // Config tunes the guards.

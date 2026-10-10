@@ -11,7 +11,7 @@ import (
 
 	_ "modernc.org/sqlite" // pure-Go driver: keeps CGO_ENABLED=0 builds
 
-	"airc/pkg/proto"
+	"github.com/babs/airc/pkg/proto"
 )
 
 // Message is one line on the bus.

@@ -16,10 +16,10 @@ import (
 
 	"go.uber.org/zap"
 
-	"airc/pkg/bus"
-	"airc/pkg/driver"
-	"airc/pkg/proto"
-	"airc/pkg/store"
+	"github.com/babs/airc/pkg/bus"
+	"github.com/babs/airc/pkg/driver"
+	"github.com/babs/airc/pkg/proto"
+	"github.com/babs/airc/pkg/store"
 )
 
 // StatusFunc reports live agent state; nil means no driver is attached.

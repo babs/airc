@@ -1,4 +1,4 @@
-module airc
+module github.com/babs/airc
 
 go 1.26.5
 

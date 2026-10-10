@@ -1,11 +1,11 @@
 APP_NAME    := airc
-MODULE      := airc
+MODULE      := github.com/babs/airc
 PKG         := .
 VERSION     ?= v0.0.0
 COMMIT_HASH := $(shell git rev-parse --short HEAD 2>/dev/null || echo "0000000")
 BUILD_TS    := $(shell date -Iseconds)
 BUILDER     := $(shell go version 2>/dev/null || echo "unknown")
-PROJECT_URL ?= $(MODULE)
+PROJECT_URL ?= https://$(MODULE)
 LDFLAGS     := -s -w \
   -X 'main.Version=$(VERSION)' \
   -X 'main.CommitHash=$(COMMIT_HASH)' \

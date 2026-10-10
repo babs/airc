@@ -13,9 +13,9 @@ import (
 
 	"go.uber.org/zap"
 
-	"airc/pkg/bus"
-	"airc/pkg/driver"
-	"airc/pkg/store"
+	"github.com/babs/airc/pkg/bus"
+	"github.com/babs/airc/pkg/driver"
+	"github.com/babs/airc/pkg/store"
 )
 
 func newSrv(t *testing.T) (*httptest.Server, *bus.Bus) {

@@ -21,12 +21,12 @@ import (
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/term"
 
-	"airc/pkg/bus"
-	"airc/pkg/driver"
-	"airc/pkg/provider"
-	"airc/pkg/restart"
-	"airc/pkg/store"
-	"airc/pkg/web"
+	"github.com/babs/airc/pkg/bus"
+	"github.com/babs/airc/pkg/driver"
+	"github.com/babs/airc/pkg/provider"
+	"github.com/babs/airc/pkg/restart"
+	"github.com/babs/airc/pkg/store"
+	"github.com/babs/airc/pkg/web"
 )
 
 var (

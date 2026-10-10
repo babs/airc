@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"airc/pkg/proto"
-	"airc/pkg/provider"
-	"airc/pkg/store"
+	"github.com/babs/airc/pkg/proto"
+	"github.com/babs/airc/pkg/provider"
+	"github.com/babs/airc/pkg/store"
 )
 
 // Angle brackets live inside backticks: the UI renders markdown and would strip them as HTML.

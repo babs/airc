@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"airc/pkg/store"
+	"github.com/babs/airc/pkg/store"
 )
 
 func TestPostFansOut(t *testing.T) {

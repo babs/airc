@@ -12,9 +12,9 @@ import (
 
 	"go.uber.org/zap"
 
-	"airc/pkg/bus"
-	"airc/pkg/provider"
-	"airc/pkg/store"
+	"github.com/babs/airc/pkg/bus"
+	"github.com/babs/airc/pkg/provider"
+	"github.com/babs/airc/pkg/store"
 )
 
 // fake replies with a scripted function and records turns.

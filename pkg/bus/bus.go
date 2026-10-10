@@ -6,8 +6,8 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"airc/pkg/proto"
-	"airc/pkg/store"
+	"github.com/babs/airc/pkg/proto"
+	"github.com/babs/airc/pkg/store"
 )
 
 // Bus posts messages to the store and to every live subscriber.
